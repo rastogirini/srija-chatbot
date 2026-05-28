@@ -1,28 +1,36 @@
 """
 Restaurant Chatbot API - Flask Backend
-SIMPLIFIED VERSION - KEYWORD MATCHING ONLY
 """
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import sys
-import os
 from datetime import datetime
 import re
-import duckdb
+import psycopg2
 import random
 from datetime import timedelta
+from groq import Groq
+
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+def get_db_connection():
+    return psycopg2.connect(
+        database=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        host=os.getenv("DB_HOST"),
+        port=os.getenv("DB_PORT")
+    )
+
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": ["http://localhost:3000", "http://localhost:5173"]}})
 
 conversation = []
-"""DATABASE_FILE = 'restaurant_chatbot.duckdb'"""
-
-import os
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATABASE_FILE = os.path.join(BASE_DIR, 'restaurant_chatbot.duckdb')
 
 # Restaurant data
 RESTAURANT_DATA = {
@@ -59,37 +67,62 @@ RESTAURANT_DATA = {
 
 RESERVATIONS = {}
 
+def get_ai_response(user_message):
+
+    try:
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": user_message,
+                }
+            ],
+            model="llama-3.1-8b-instant"
+        )
+
+        return chat_completion.choices[0].message.content
+
+    except Exception as e:
+        print(f"Groq Error: {e}")
+        return "I'm currently unable to access AI responses, but I can still help with reservations, menu, and restaurant timings."
+    
+
 # ============================================================================
 # DATABASE FUNCTIONS
 # ============================================================================
 
 def init_database():
-    """Initialize database"""
     try:
-        conn = duckdb.connect(DATABASE_FILE)
-        conn.execute("""
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS reservations (
-                id VARCHAR PRIMARY KEY,
-                name VARCHAR NOT NULL,
+                id VARCHAR(50) PRIMARY KEY,
+                name VARCHAR(100) NOT NULL,
                 party_size INTEGER,
-                date VARCHAR,
-                time VARCHAR,
-                allergies VARCHAR,
-                dietary VARCHAR,
-                occasion VARCHAR,
-                seating VARCHAR,
-                instructions VARCHAR,
+                date VARCHAR(50),
+                time VARCHAR(50),
+                allergies TEXT,
+                dietary TEXT,
+                occasion TEXT,
+                seating TEXT,
+                instructions TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
         conn.commit()
+        cur.close()
         conn.close()
-        print("✅ Database initialized")
+
+        print("✅ PostgreSQL database initialized")
+
     except Exception as e:
         print(f"❌ Database error: {e}")
 
 # ============================================================================
-# CHATBOT FUNCTIONS (KEYWORD MATCHING ONLY)
+# CHATBOT FUNCTIONS 
 # ============================================================================
 
 def detect_intent(message):
@@ -112,6 +145,11 @@ def extract_reservation_info(message):
         "date": None,
         "time": None,
         "name": None,
+        "allergies":None,
+        "seating":None,
+        "dietary":None,
+        "occasion":None,
+        "instructions":None
     }
     
     # Extract party size
@@ -144,82 +182,133 @@ def extract_reservation_info(message):
         name_match = re.search(pattern, message, re.IGNORECASE)
         if name_match:
             extracted["name"] = name_match.group(1).capitalize()
-            break
     
+            # Extract dietary preference
+        if "vegetarian" in message.lower():
+            extracted["dietary"] = "Vegetarian"
+
+        elif "vegan" in message.lower():
+            extracted["dietary"] = "Vegan"
+
+        # Extract occasion
+        if "birthday" in message.lower():
+            extracted["occasion"] = "Birthday"
+
+        elif "anniversary" in message.lower():
+            extracted["occasion"] = "Anniversary"
+
+        # Extract seating preference
+        if "window" in message.lower():
+            extracted["seating"] = "Window"
+
+        elif "outdoor" in message.lower():
+            extracted["seating"] = "Outdoor"
+
+        elif "corner" in message.lower():
+            extracted["seating"] = "Corner"
+
+        # Extract allergies
+        allergy_match = re.search(
+            r'allergic to ([A-Za-z\s]+)',
+            message,
+            re.IGNORECASE
+        )
+
+        if allergy_match:
+            extracted["allergies"] = allergy_match.group(1).strip()
+
+        # Extract special instructions
+        instruction_match = re.search(
+            r'instructions?:\s*(.*)',
+            message,
+            re.IGNORECASE
+        )
+
+        if instruction_match:
+            extracted["instructions"] = instruction_match.group(1).strip()
+            break
+            
     return extracted
 
 def handle_reservation(info):
     """Handle reservation request"""
+
     party_size = info.get("party_size")
     date = info.get("date")
     time = info.get("time")
     name = info.get("name") or "Guest"
-    
+    allergies = info.get("allergies")
+    dietary = info.get("dietary")
+    occasion = info.get("occasion")
+    seating = info.get("seating")
+    instructions = info.get("instructions")
+
     if not party_size or not date or not time:
         return "I'd be happy to help with a reservation! Please provide: party size, date, and time."
-    
+
     if party_size > RESTAURANT_DATA["max_party_size"]:
         return f"We can only accommodate up to {RESTAURANT_DATA['max_party_size']} people. Please call us at {RESTAURANT_DATA['phone']}"
-    
-    
-    # Save reservation
+
     try:
-        conn = duckdb.connect(DATABASE_FILE)
+        conn = get_db_connection()
+        cur = conn.cursor()
 
         reservation_id = f"RES-{random.randint(1000,9999)}"
 
-        conn.execute("""
+        cur.execute("""
             INSERT INTO reservations (
                 id, name, party_size, date, time,
                 allergies, dietary, occasion, seating, instructions
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, [
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
             reservation_id,
             name,
             party_size,
             date,
             time,
-            "",
-            "",
-            "",
-            "",
-            ""
-        ])
+            allergies,
+            dietary,
+            occasion,
+            seating,
+            instructions
+        ))
 
         conn.commit()
+        cur.close()
         conn.close()
 
         print(f"✅ Saved reservation: {reservation_id}")
 
     except Exception as e:
         print(f"❌ Database error: {e}")
+        return "Database error while saving reservation."
 
-    
     RESERVATIONS[reservation_id] = {
         "name": name,
         "party_size": party_size,
         "date": date,
         "time": time,
+        
     }
-    
+
     response = f"""✅ RESERVATION CONFIRMED!
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Reservation ID: {reservation_id}
-Restaurant: {RESTAURANT_DATA['name']}
-Phone: {RESTAURANT_DATA['phone']}
 
 👤 Name: {name}
-👥 Party Size: {party_size} people
+👥 Party Size: {party_size}
 📅 Date: {date}
 ⏰ Time: {time}
+🍽️ Dietary: {dietary or 'None'}
+⚠️ Allergies: {allergies or 'None'}
+🎉 Occasion: {occasion or 'None'}
+🪟 Seating: {seating or 'Standard'}
+📝 Instructions: {instructions or 'None'}
 
-📍 Address: {RESTAURANT_DATA['address']}
-📧 Email: {RESTAURANT_DATA['email']}
+Thank you for choosing {RESTAURANT_DATA['name']}! 🍽️
+"""
 
-Thank you for choosing {RESTAURANT_DATA['name']}! 🍽️"""
-    
     return response
 
 def handle_hours():
@@ -238,23 +327,28 @@ def handle_menu():
     return menu_text
 
 def process_message(user_message):
+
     """Process user message and return response"""
+
     print(f"📝 Message received: {user_message}")
-    
+
     intent = detect_intent(user_message)
     print(f"🤖 Intent detected: {intent}")
-    
+
     if intent == "reservation":
         info = extract_reservation_info(user_message)
         print(f"📋 Extracted: {info}")
         response = handle_reservation(info)
+
     elif intent == "hours":
         response = handle_hours()
+
     elif intent == "menu":
         response = handle_menu()
+
     else:
-        response = f"I can help with reservations, hours, or menu. Call us at {RESTAURANT_DATA['phone']} for other questions."
-    
+        response = get_ai_response(user_message)
+
     print(f"📤 Response: {response[:100]}...")
     return response
 
@@ -299,12 +393,22 @@ def handle_chat():
 
 @app.route('/api/reservations', methods=['GET'])
 def get_reservations():
-    """Get all reservations"""
+
     try:
-        conn = duckdb.connect(DATABASE_FILE)
-        result = conn.execute("SELECT * FROM reservations ORDER BY created_at DESC").fetchall()
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT id, name, party_size, date, time
+            FROM reservations
+            ORDER BY created_at DESC
+        """)
+
+        result = cur.fetchall()
+
+        cur.close()
         conn.close()
-        
+
         reservations = [
             {
                 'id': row[0],
@@ -315,11 +419,18 @@ def get_reservations():
             }
             for row in result
         ]
-        
-        return jsonify({'reservations': reservations, 'success': True}), 200
-    except Exception as e:
-        return jsonify({'error': str(e), 'success': False}), 500
 
+        return jsonify({
+            'reservations': reservations,
+            'success': True
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            'error': str(e),
+            'success': False
+        }), 500
+    
 @app.route('/api/chat/reset', methods=['POST'])
 def reset_chat():
     """Reset conversation"""
