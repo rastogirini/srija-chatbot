@@ -127,7 +127,12 @@ def init_database():
 
 def detect_intent(message):
     """Detect intent using keywords"""
+
+
     message_lower = message.lower()
+
+    if any(word in message_lower for word in ["cancel","delete","remove reservation","cancel reservation"]):
+        return "cancel_reservation"
     
     if any(word in message_lower for word in ["book", "table", "reservation", "reserve", "party", "people"]):
         return "reservation"
@@ -311,6 +316,45 @@ Thank you for choosing {RESTAURANT_DATA['name']}! 🍽️
 
     return response
 
+"""Reservation Deletion"""
+def cancel_reservation(user_message):
+
+    reservation_match = re.search(
+        r'RES-\w+',
+        user_message,
+        re.IGNORECASE
+    )
+
+    if not reservation_match:
+        return "Please provide a reservation ID. Example: Cancel reservation RES-1234"
+
+    reservation_id = reservation_match.group(0)
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            "DELETE FROM reservations WHERE id = %s",
+            (reservation_id,)
+        )
+
+        deleted_rows = cur.rowcount
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        if deleted_rows == 0:
+            return f"No reservation found with ID {reservation_id}"
+
+        return f"✅ Reservation {reservation_id} has been cancelled successfully."
+
+    except Exception as e:
+        print(f"Database Error: {e}")
+        return "Error cancelling reservation."
+    
+
 def handle_hours():
     """Return restaurant hours"""
     hours_text = "\n".join([f"{day}: {hours}" for day, hours in RESTAURANT_DATA["hours"].items()])
@@ -335,7 +379,10 @@ def process_message(user_message):
     intent = detect_intent(user_message)
     print(f"🤖 Intent detected: {intent}")
 
-    if intent == "reservation":
+    if intent == "cancel_reservation":
+        response = cancel_reservation(user_message)
+
+    elif intent == "reservation":
         info = extract_reservation_info(user_message)
         print(f"📋 Extracted: {info}")
         response = handle_reservation(info)
