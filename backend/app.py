@@ -134,6 +134,9 @@ def detect_intent(message):
     if any(word in message_lower for word in ["cancel","delete","remove reservation","cancel reservation"]):
         return "cancel_reservation"
     
+    if any(word in message_lower for word in ["update reservation","change reservation","modify reservation","reschedule","update","modify","change"]):
+        return "update_reservation"
+    
     if any(word in message_lower for word in ["book", "table", "reservation", "reserve", "party", "people"]):
         return "reservation"
     elif any(word in message_lower for word in ["hours", "open", "close", "time", "available"]):
@@ -202,6 +205,18 @@ def extract_reservation_info(message):
         elif "anniversary" in message.lower():
             extracted["occasion"] = "Anniversary"
 
+        elif "anniversary" in message.lower():
+            extracted["occasion"] = "wedding"
+
+        elif "anniversary" in message.lower():
+            extracted["occasion"] = "apparaisal"
+        
+        elif "anniversary" in message.lower():
+            extracted["occasion"] = "promotion"
+
+        elif "anniversary" in message.lower():
+            extracted["occasion"] = "increment"
+        
         # Extract seating preference
         if "window" in message.lower():
             extracted["seating"] = "Window"
@@ -353,7 +368,110 @@ def cancel_reservation(user_message):
     except Exception as e:
         print(f"Database Error: {e}")
         return "Error cancelling reservation."
-    
+
+def update_reservation(user_message):
+
+    reservation_match = re.search(
+        r'RES-\w+',
+        user_message,
+        re.IGNORECASE
+    )
+
+    if not reservation_match:
+        return "Please provide a reservation ID."
+
+    reservation_id = reservation_match.group(0)
+
+    new_time = None
+    new_date = None
+    new_party_size = None
+
+    # Party Size
+
+    people_match = re.search(
+        r'(\d+)\s*(people|person|guests?)',
+        user_message,
+        re.IGNORECASE
+    )
+
+    party_match = re.search(
+        r'party\s*_?\s*size.*?to\s*(\d+)',
+        user_message,
+        re.IGNORECASE
+    )
+
+    if people_match:
+        new_party_size = int(people_match.group(1))
+
+    elif party_match:
+        new_party_size = int(party_match.group(1))
+
+
+    # Date
+    if "today" in user_message.lower():
+        new_date = datetime.now().strftime("%Y-%m-%d")
+
+    elif "tomorrow" in user_message.lower():
+        new_date = (
+            datetime.now() + timedelta(days=1)
+        ).strftime("%Y-%m-%d")
+
+    # Time
+    time_matches = re.findall(
+        r'(\d{1,2}\s*(?:am|pm))',
+        user_message,
+        re.IGNORECASE
+    )
+
+    if time_matches:
+        new_time = time_matches[-1]
+        
+    update_fields = []
+    values = []
+
+    if new_time:
+        update_fields.append("time = %s")
+        values.append(new_time)
+
+    if new_date:
+        update_fields.append("date = %s")
+        values.append(new_date)
+
+    if new_party_size:
+        update_fields.append("party_size = %s")
+        values.append(new_party_size)
+
+    if not update_fields:
+        return "Please provide something to update."
+
+    values.append(reservation_id)
+
+    query = f"""
+        UPDATE reservations
+        SET {', '.join(update_fields)}
+        WHERE id = %s
+    """
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute(query, values)
+
+        updated_rows = cur.rowcount
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        if updated_rows == 0:
+            return f"No reservation found with ID {reservation_id}"
+
+        return f"✅ Reservation {reservation_id} updated successfully."
+
+    except Exception as e:
+        print(f"Database Error: {e}")
+        return "Error updating reservation."   
 
 def handle_hours():
     """Return restaurant hours"""
@@ -381,6 +499,10 @@ def process_message(user_message):
 
     if intent == "cancel_reservation":
         response = cancel_reservation(user_message)
+
+    elif intent == "update_reservation":
+        response = update_reservation(user_message)
+
 
     elif intent == "reservation":
         info = extract_reservation_info(user_message)
