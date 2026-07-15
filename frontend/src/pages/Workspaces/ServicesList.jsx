@@ -8,7 +8,7 @@ const ServicesList = () => {
   const workspaces = [
     {
       id: 1,
-      title: "Astra Tech",
+      title: "Astra Tech(Food & Resto.)",
       description:
         "A cutting-edge technology consulting firm specializing in cloud modernization and enterprise automation.",
       serviceCount: 2,
@@ -17,7 +17,7 @@ const ServicesList = () => {
     },
     {
       id: 2,
-      title: "Blue Peak",
+      title: "Blue Peak(Cosmetic)",
       description:
         "A cutting-edge technology consulting firm specializing in cloud modernization and enterprise automation.",
       serviceCount: 4,
@@ -26,7 +26,7 @@ const ServicesList = () => {
     },
     {
       id: 3,
-      title: "Nova Core",
+      title: "Nova Core(Fitness & Health)",
       description:
         "A cutting-edge technology consulting firm specializing in cloud modernization and enterprise automation.",
       serviceCount: 3,
@@ -35,7 +35,7 @@ const ServicesList = () => {
     },
     {
       id: 4,
-      title: "Silver Line",
+      title: "Silver Line(Fashion & Clothing)",
       description:
         "A cutting-edge technology consulting firm specializing in cloud modernization and enterprise automation.",
       serviceCount: 1,

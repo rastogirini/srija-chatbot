@@ -1,36 +1,48 @@
 """
 Restaurant Chatbot API - Flask Backend
+POSTGRESQL + OLLAMA AI + CUSTOMER RECOGNITION (Phone + Email)
 """
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import sys
-from datetime import datetime
+import requests
+import json
+from datetime import datetime, timedelta
 import re
 import psycopg2
-import random
-from datetime import timedelta
-from groq import Groq
-
-from dotenv import load_dotenv
+from psycopg2.extras import RealDictCursor
 import os
+from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv()
-def get_db_connection():
-    return psycopg2.connect(
-        database=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT")
-    )
-
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": ["http://localhost:3000", "http://localhost:5173"]}})
 
 conversation = []
+OLLAMA_URL = "http://localhost:11434/api/generate"
+
+# ============================================================================
+# DATABASE CONFIG
+# ============================================================================
+
+DB_CONFIG = {
+    'host': os.getenv('DB_HOST'),
+    'port': os.getenv('DB_PORT'),
+    'database': os.getenv('DB_NAME'),
+    'user': os.getenv('DB_USER'),
+    'password': os.getenv('DB_PASSWORD')
+}
+
+def get_db_connection():
+    """Get PostgreSQL connection"""
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        return conn
+    except Exception as e:
+        print(f"❌ Database connection error: {e}")
+        return None
 
 # Restaurant data
 RESTAURANT_DATA = {
@@ -50,122 +62,349 @@ RESTAURANT_DATA = {
     },
     "menu": {
         "appetizers": [
-            {"name": "Bruschetta", "price": "$8.99"},
-            {"name": "Calamari", "price": "$10.99"},
+            {"name": "Bruschetta", "price": "$8.99", "description": "Toasted bread with tomatoes and garlic"},
+            {"name": "Calamari", "price": "$10.99", "description": "Fried squid with marinara sauce"},
         ],
         "mains": [
-            {"name": "Grilled Salmon", "price": "$18.99"},
-            {"name": "Pasta Carbonara", "price": "$14.99"},
-            {"name": "Ribeye Steak", "price": "$22.99"},
+            {"name": "Grilled Salmon", "price": "$18.99", "description": "Fresh salmon with lemon butter sauce"},
+            {"name": "Pasta Carbonara", "price": "$14.99", "description": "Classic Italian pasta with bacon and cream"},
+            {"name": "Ribeye Steak", "price": "$22.99", "description": "12oz USDA Prime cut with vegetables"},
         ],
         "desserts": [
-            {"name": "Tiramisu", "price": "$7.99"},
-            {"name": "Chocolate Cake", "price": "$6.99"},
+            {"name": "Tiramisu", "price": "$7.99", "description": "Italian coffee-flavored dessert"},
+            {"name": "Chocolate Cake", "price": "$6.99", "description": "Rich dark chocolate cake with frosting"},
         ],
     }
 }
 
-RESERVATIONS = {}
-
-def get_ai_response(user_message):
-
-    try:
-        chat_completion = client.chat.completions.create(
-            messages=[
-                {
-                    "role": "user",
-                    "content": user_message,
-                }
-            ],
-            model="llama-3.1-8b-instant"
-        )
-
-        return chat_completion.choices[0].message.content
-
-    except Exception as e:
-        print(f"Groq Error: {e}")
-        return "I'm currently unable to access AI responses, but I can still help with reservations, menu, and restaurant timings."
-    
-
 # ============================================================================
-# DATABASE FUNCTIONS
+# DATABASE INITIALIZATION
 # ============================================================================
 
 def init_database():
+    """Initialize PostgreSQL tables"""
+    conn = get_db_connection()
+    if not conn:
+        print("❌ Cannot connect to database!")
+        return
+    
     try:
-        conn = get_db_connection()
         cur = conn.cursor()
-
+        
+        # Create customers table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS customers (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(100) NOT NULL,
+                email VARCHAR(100),
+                phone VARCHAR(20),
+                visits INTEGER DEFAULT 1,
+                favorite_table VARCHAR(50),
+                favorite_time VARCHAR(20),
+                favorite_dishes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(name, phone, email)
+            )
+        """)
+        
+        # Create reservations table
         cur.execute("""
             CREATE TABLE IF NOT EXISTS reservations (
-                id VARCHAR(50) PRIMARY KEY,
-                name VARCHAR(100) NOT NULL,
+                id SERIAL PRIMARY KEY,
+                reservation_id VARCHAR(20) UNIQUE NOT NULL,
+                customer_name VARCHAR(100),
+                email VARCHAR(100),
+                phone VARCHAR(20),
                 party_size INTEGER,
-                date VARCHAR(50),
-                time VARCHAR(50),
+                reservation_date DATE,
+                reservation_time VARCHAR(20),
+                dietary_restrictions TEXT,
                 allergies TEXT,
-                dietary TEXT,
-                occasion TEXT,
-                seating TEXT,
-                instructions TEXT,
+                special_occasion VARCHAR(100),
+                seating_preference VARCHAR(50),
+                special_instructions TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (customer_name) REFERENCES customers(name) ON DELETE CASCADE
+            )
+        """)
+        
+        # Create chat_history table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS chat_history (
+                id SERIAL PRIMARY KEY,
+                customer_name VARCHAR(100),
+                user_message TEXT,
+                bot_response TEXT,
+                intent VARCHAR(50),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        
+        conn.commit()
+        print("✅ Database tables initialized")
+        cur.close()
+        
+    except Exception as e:
+        print(f"❌ Error initializing database: {e}")
+    finally:
+        conn.close()
 
+# ============================================================================
+# CUSTOMER RECOGNITION FUNCTIONS
+# ============================================================================
+
+def extract_name_from_message(message):
+    """Extract customer name from message"""
+    
+    # Try to find "i am XXX" first
+    match = re.search(r'i\s+am\s+([A-Za-z]+)', message, re.IGNORECASE)
+    if match:
+        return match.group(1).capitalize()
+    
+    # Try to find "name: XXX"
+    match = re.search(r'name\s*:\s*([A-Za-z]+)', message, re.IGNORECASE)
+    if match:
+        return match.group(1).capitalize()
+    
+    # Try "by the name of XXX" or "for the name of XXX"
+    match = re.search(r'(?:by|for)\s+the\s+name\s+of\s+([A-Za-z]+)', message, re.IGNORECASE)
+    if match:
+        return match.group(1).capitalize()
+    
+    # Try "under the name of XXX"
+    match = re.search(r'under\s+the\s+name\s+of\s+([A-Za-z]+)', message, re.IGNORECASE)
+    if match:
+        return match.group(1).capitalize()
+    
+    return None
+
+def extract_phone_from_message(message):
+    """Extract phone number from message"""
+    # Matches: +91-9876543210, 9876543210, +1-234-5678, etc.
+    patterns = [
+        r'(?:phone|mobile|number|call)[\s:]+(\+?[\d\-\s]{10,})',
+        r'(\+?[\d\-]{10,})',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, message, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    
+    return None
+
+def extract_email_from_message(message):
+    """Extract email from message"""
+    match = re.search(r'(\w+@\w+\.\w+)', message, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return None
+
+def recognize_customer(name, phone=None, email=None):
+    """Check if customer is returning by email (unique identifier)"""
+    if not name:
+        return None
+    
+    conn = get_db_connection()
+    if not conn:
+        return None
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Priority 1: Search by email (most reliable)
+        if email:
+            print(f"🔍 Searching by: email only")
+            cur.execute("SELECT * FROM customers WHERE LOWER(email) = LOWER(%s)", (email,))
+            customer = cur.fetchone()
+            if customer:
+                cur.close()
+                conn.close()
+                return customer
+        
+        # Priority 2: Search by phone + name
+        if phone:
+            print(f"🔍 Searching by: name + phone")
+            cur.execute(
+                "SELECT * FROM customers WHERE LOWER(name) = LOWER(%s) AND phone = %s", 
+                (name, phone)
+            )
+            customer = cur.fetchone()
+            if customer:
+                cur.close()
+                conn.close()
+                return customer
+        
+        # Priority 3: Search by name only
+        print(f"🔍 Searching by: name only")
+        cur.execute("SELECT * FROM customers WHERE LOWER(name) = LOWER(%s)", (name,))
+        customer = cur.fetchone()
+        cur.close()
+        conn.close()
+        return customer
+        
+    except Exception as e:
+        print(f"❌ Error recognizing customer: {e}")
+        return None
+    
+def get_greeting(customer):
+    """Generate personalized greeting"""
+    if customer:
+        visits = customer.get('visits', 1)
+        favorite_table = customer.get('favorite_table', 'a table')
+        
+        if visits == 1:
+            return f"Hi, {customer['name']}! 👋"
+        else:
+            return f"Welcome back, {customer['name']}! 👋\nIt's great to see you again — this will be visit #{visits + 1}!\nI remember you love our {favorite_table} tables!"
+    return "Welcome to Srija's Taste! 🍽️"
+
+def get_history(customer_name):
+    """Get customer's reservation history"""
+    if not customer_name:
+        return []
+    
+    conn = get_db_connection()
+    if not conn:
+        return []
+    
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT reservation_id, reservation_date, reservation_time, party_size
+            FROM reservations
+            WHERE customer_name = %s
+            ORDER BY created_at DESC
+            LIMIT 5
+        """, (customer_name,))
+        history = cur.fetchall()
+        cur.close()
+        return history
+    except Exception as e:
+        print(f"❌ Error getting history: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_recommendations(customer):
+    """Get personalized recommendations"""
+    if not customer:
+        return None
+    
+    favorites = customer.get('favorite_dishes', '')
+    fav_text = favorites if favorites else "our menu"
+    
+    recommendations = f"""
+💡 Personalized Recommendations:
+• You loved {fav_text} last time!
+• Your favorite {customer.get('favorite_table', 'table')} is available
+• Try our new seasonal specials"""
+    
+    return recommendations
+
+def save_customer(name, email=None, phone=None, favorite_table=None, favorite_dishes=None, favorite_time=None):
+    """Save or update customer and return customer_id"""
+    if not name:
+        return None
+    
+    conn = get_db_connection()
+    if not conn:
+        return None
+    
+    try:
+        cur = conn.cursor()
+        
+        # Check if customer exists
+        cur.execute(
+            "SELECT id FROM customers WHERE name = %s AND phone = %s AND email = %s",
+            (name, phone, email)
+        )
+        existing = cur.fetchone()
+        
+        if existing:
+            # Update visits AND preferences
+            customer_id = existing[0]
+            cur.execute("""
+                UPDATE customers 
+                SET visits = visits + 1, 
+                    favorite_table = %s,
+                    favorite_dishes = %s,
+                    favorite_time = %s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+            """, (favorite_table, favorite_dishes, favorite_time, customer_id))
+        else:
+            # Add new customer WITH preferences
+            cur.execute("""
+                INSERT INTO customers (name, email, phone, favorite_table, favorite_dishes, favorite_time)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (name, email, phone, favorite_table, favorite_dishes, favorite_time))
+            customer_id = cur.fetchone()[0]
+        
         conn.commit()
         cur.close()
         conn.close()
-
-        print("✅ PostgreSQL database initialized")
-
+        
+        print(f"✅ Customer saved: {name}, ID: {customer_id}")
+        return customer_id
+        
     except Exception as e:
-        print(f"❌ Database error: {e}")
-
-# ============================================================================
-# CHATBOT FUNCTIONS 
-# ============================================================================
-
-def detect_intent(message):
-    """Detect intent using keywords"""
-
-
-    message_lower = message.lower()
-
-    if any(word in message_lower for word in ["cancel","delete","remove reservation","cancel reservation"]):
-        return "cancel_reservation"
+        print(f"❌ Error saving customer: {e}")
+        return None
     
-    if any(word in message_lower for word in ["update reservation","change reservation","modify reservation","reschedule","update","modify","change"]):
-        return "update_reservation"
-    
-    if any(word in message_lower for word in ["book", "table", "reservation", "reserve", "party", "people"]):
-        return "reservation"
-    elif any(word in message_lower for word in ["hours", "open", "close", "time", "available"]):
-        return "hours"
-    elif any(word in message_lower for word in ["menu", "food", "dish", "price", "eat"]):
-        return "menu"
-    else:
-        return "unknown"
+# ============================================================================
+# OLLAMA AI FUNCTIONS
+# ============================================================================
+
+def get_ollama_response(prompt):
+    """Get response from Ollama"""
+    try:
+        print(f"🤖 Calling Ollama...")
+        
+        payload = {
+            "model": "phi3",
+            "prompt": prompt,
+            "stream": False,
+            "temperature": 0.7
+        }
+        
+        response = requests.post(OLLAMA_URL, json=payload, timeout=30)
+        
+        if response.status_code == 200:
+            data = response.json()
+            ai_response = data.get('response', '').strip()
+            print(f"✅ Ollama responded!")
+            return ai_response
+        else:
+            print(f"❌ Ollama error: {response.status_code}")
+            return None
+            
+    except requests.exceptions.ConnectionError:
+        print("❌ Cannot connect to Ollama! Make sure it's running (ollama serve)")
+        return None
+    except Exception as e:
+        print(f"❌ Ollama error: {e}")
+        return None
 
 def extract_reservation_info(message):
-    """Extract reservation details"""
+    """Extract reservation details including phone and email"""
     extracted = {
         "party_size": None,
         "date": None,
         "time": None,
         "name": None,
-        "allergies":None,
-        "seating":None,
-        "dietary":None,
-        "occasion":None,
-        "instructions":None
+        "phone": None,
+        "email": None,
+        "allergies": None,
+        "dietary": None,
+        "occasion": None,
+        "seating": None,
     }
     
     # Extract party size
-    people_match = re.search(
-        r'(?:for\s+)?(\d+)\s*(people|person|guests?)?',
-        message,
-        re.IGNORECASE
-    )
+    people_match = re.search(r'(\d+)\s+(people|person|guests?)', message, re.IGNORECASE)
     if people_match:
         extracted["party_size"] = int(people_match.group(1))
     
@@ -181,344 +420,246 @@ def extract_reservation_info(message):
         extracted["date"] = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
     
     # Extract name
-    name_patterns = [
-        r'under the name of\s+([A-Za-z]+)',
-        r'name (?:is|of)\s+([A-Za-z]+)',
-    ]
+    match = re.search(r'name\s*:\s*([A-Za-z]+)', message, re.IGNORECASE)
+    if match:
+        extracted["name"] = match.group(1).capitalize()
     
-    for pattern in name_patterns:
-        name_match = re.search(pattern, message, re.IGNORECASE)
-        if name_match:
-            extracted["name"] = name_match.group(1).capitalize()
+    # Extract phone
+    extracted["phone"] = extract_phone_from_message(message)
     
-            # Extract dietary preference
-        if "vegetarian" in message.lower():
-            extracted["dietary"] = "Vegetarian"
-
-        elif "vegan" in message.lower():
-            extracted["dietary"] = "Vegan"
-
-        # Extract occasion
-        if "birthday" in message.lower():
-            extracted["occasion"] = "Birthday"
-
-        elif "anniversary" in message.lower():
-            extracted["occasion"] = "Anniversary"
-
-        elif "anniversary" in message.lower():
-            extracted["occasion"] = "wedding"
-
-        elif "anniversary" in message.lower():
-            extracted["occasion"] = "apparaisal"
-        
-        elif "anniversary" in message.lower():
-            extracted["occasion"] = "promotion"
-
-        elif "anniversary" in message.lower():
-            extracted["occasion"] = "increment"
-        
-        # Extract seating preference
-        if "window" in message.lower():
-            extracted["seating"] = "Window"
-
-        elif "outdoor" in message.lower():
-            extracted["seating"] = "Outdoor"
-
-        elif "corner" in message.lower():
-            extracted["seating"] = "Corner"
-
-        # Extract allergies
-        allergy_match = re.search(
-            r'allergic to ([A-Za-z\s]+)',
-            message,
-            re.IGNORECASE
-        )
-
-        if allergy_match:
-            extracted["allergies"] = allergy_match.group(1).strip()
-
-        # Extract special instructions
-        instruction_match = re.search(
-            r'instructions?:\s*(.*)',
-            message,
-            re.IGNORECASE
-        )
-
-        if instruction_match:
-            extracted["instructions"] = instruction_match.group(1).strip()
-            break
-            
+    # Extract email
+    extracted["email"] = extract_email_from_message(message)
+    
+    # Extract allergies
+    allergy_match = re.search(r'(?:allergic to|allergies?)\s*:\s*([A-Za-z\s,]+?)(?:\s+dietary|$)', message, re.IGNORECASE)
+    if allergy_match:
+        extracted["allergies"] = allergy_match.group(1).strip()
+    
+    # Extract dietary
+    dietary_match = re.search(r'dietary\s*:\s*([A-Za-z\s,]+?)(?:\s+occasion|$)', message, re.IGNORECASE)
+    if dietary_match:
+        extracted["dietary"] = dietary_match.group(1).strip()
+    
+    # Extract occasion
+    occasion_match = re.search(r'occasion\s*:\s*([A-Za-z\s,]+?)(?:\s+seating|$)', message, re.IGNORECASE)
+    if occasion_match:
+        extracted["occasion"] = occasion_match.group(1).strip()
+    
+    # Extract seating - TRY MULTIPLE PATTERNS
+    # Pattern 1: "corner table" or "window table"
+    seating_match = re.search(r'(?:book\s+a\s+)?(\w+)\s+table', message, re.IGNORECASE)
+    if seating_match:
+        extracted["seating"] = seating_match.group(1).capitalize()
+    else:
+        # Pattern 2: "seating: corner"
+        seating_match = re.search(r'seating\s*:\s*([A-Za-z\s]+?)(?:\s+$|$)', message, re.IGNORECASE)
+        if seating_match:
+            extracted["seating"] = seating_match.group(1).strip()
+    
     return extracted
+GREETING_PATTERN = re.compile(r'^(hi+|hello+|hey+|good (morning|afternoon|evening)|greetings|yo)[\s!.,]*$')
 
-def handle_reservation(info):
-    """Handle reservation request"""
+def detect_intent(message):
+    """Detect if greeting, reservation, hours, menu, or general"""
+    message_lower = message.lower().strip()
 
-    party_size = info.get("party_size")
-    date = info.get("date")
-    time = info.get("time")
-    name = info.get("name") or "Guest"
-    allergies = info.get("allergies")
-    dietary = info.get("dietary")
-    occasion = info.get("occasion")
-    seating = info.get("seating")
-    instructions = info.get("instructions")
+    if GREETING_PATTERN.fullmatch(message_lower):
+        return "greeting"
 
-    if not party_size or not date or not time:
-        return "I'd be happy to help with a reservation! Please provide: party size, date, and time."
+    if any(word in message_lower for word in ["book", "table", "reservation", "reserve", "party", "people"]):
+        return "reservation"
+    elif any(word in message_lower for word in ["hours", "open", "close", "time", "available"]):
+        return "hours"
+    elif any(word in message_lower for word in ["menu", "food", "dish", "price"]):
+        return "menu"
+    else:
+        return "general"
 
-    if party_size > RESTAURANT_DATA["max_party_size"]:
-        return f"We can only accommodate up to {RESTAURANT_DATA['max_party_size']} people. Please call us at {RESTAURANT_DATA['phone']}"
+def handle_reservation_request(message, customer=None, info=None):
+    """Handle reservation with AI and extraction"""
+    if not info:
+        info = extract_reservation_info(message)
+    
+    # Check if we have all required info
+    missing = []
+    if not info.get("party_size"):
+        missing.append("party size")
+    if not info.get("date"):
+        missing.append("date")
+    if not info.get("time"):
+        missing.append("time")
+    if not info.get("name"):
+        missing.append("your name")
+    if not info.get("phone"):
+        missing.append("your phone number")
+    if not info.get("email"):
+        missing.append("your email")
+    
+    if missing:
+        # Ask AI to ask for missing info
+        missing_str = ", ".join(missing)
+        prompt = f"""You are a helpful restaurant assistant for {RESTAURANT_DATA['name']}.
+Customer wants to make a reservation.
+Their message: "{message}"
+We have: Party size: {info.get('party_size')}, Date: {info.get('date')}, Time: {info.get('time')}, 
+Name: {info.get('name')}, Phone: {info.get('phone')}, Email: {info.get('email')}
 
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
+We're missing: {missing_str}
 
-        reservation_id = f"RES-{random.randint(1000,9999)}"
-
-        cur.execute("""
-            INSERT INTO reservations (
-                id, name, party_size, date, time,
-                allergies, dietary, occasion, seating, instructions
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-            reservation_id,
-            name,
-            party_size,
-            date,
-            time,
-            allergies,
-            dietary,
-            occasion,
-            seating,
-            instructions
-        ))
-
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        print(f"✅ Saved reservation: {reservation_id}")
-
-    except Exception as e:
-        print(f"❌ Database error: {e}")
-        return "Database error while saving reservation."
-
-    RESERVATIONS[reservation_id] = {
-        "name": name,
-        "party_size": party_size,
-        "date": date,
-        "time": time,
+Ask them politely for the missing information in a friendly way (1-2 sentences)."""
         
-    }
+        response = get_ollama_response(prompt)
+        if response:
+            return response
+        else:
+            return f"I'd be happy to help with a reservation! Please provide: {missing_str}"
+    
+    # Valid reservation - all info present!
+    reservation_id = f"RES-{int(datetime.now().timestamp() % 10000)}"
+    name = info.get("name")
+    phone = info.get("phone")
+    email = info.get("email")
+    favorite_table = info.get("seating", "")  # Use seating as favorite table
+    favorite_time = info.get("time", "")
+    favorite_dishes = ""  # Can add logic to extract from message if needed
 
+    # Save customer WITH preferences
+    customer_id = save_customer(name, email, phone, favorite_table, favorite_dishes, favorite_time)
+    #customer_id = save_customer(name, email, phone)
+    print(f"🔵 Customer ID from save_customer: {customer_id}")
+    
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor()
+            
+            print(f"🔵 Attempting INSERT with: {reservation_id}, {name}, {info.get('party_size')}, {info.get('date')}, {info.get('time')}, customer_id: {customer_id}")
+            
+            # Insert reservation with customer_id
+            cur.execute("""
+                INSERT INTO reservations (id, name, party_size, date, time, allergies, dietary, occasion, seating, instructions, customer_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                reservation_id,
+                name,
+                info.get("party_size"),
+                info.get("date"),
+                info.get("time"),
+                info.get("allergies", ""),
+                info.get("dietary", ""),
+                info.get("occasion", ""),
+                info.get("seating", ""),
+                "",  # instructions
+                customer_id
+            ))
+            
+            conn.commit()
+            cur.close()
+            print(f"✅ Reservation saved: {reservation_id}, customer_id: {customer_id}")
+            
+        except Exception as e:
+            print(f"❌ Database error: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            conn.close()
+    
+    # ✅ MOVED OUTSIDE if block
     response = f"""✅ RESERVATION CONFIRMED!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Reservation ID: {reservation_id}
+Restaurant: {RESTAURANT_DATA['name']}
+Phone: {RESTAURANT_DATA['phone']}
 
 👤 Name: {name}
-👥 Party Size: {party_size}
-📅 Date: {date}
-⏰ Time: {time}
-🍽️ Dietary: {dietary or 'None'}
-⚠️ Allergies: {allergies or 'None'}
-🎉 Occasion: {occasion or 'None'}
-🪟 Seating: {seating or 'Standard'}
-📝 Instructions: {instructions or 'None'}
+📧 Email: {email}
+📱 Phone: {phone}
+👥 Party Size: {info.get('party_size')} people
+📅 Date: {info.get('date')}
+⏰ Time: {info.get('time')}
 
-Thank you for choosing {RESTAURANT_DATA['name']}! 🍽️
-"""
+📍 Address: {RESTAURANT_DATA['address']}
 
+Thank you for choosing {RESTAURANT_DATA['name']}! 🍽️"""
+    
     return response
 
-"""Reservation Deletion"""
-def cancel_reservation(user_message):
-
-    reservation_match = re.search(
-        r'RES-\w+',
-        user_message,
-        re.IGNORECASE
-    )
-
-    if not reservation_match:
-        return "Please provide a reservation ID. Example: Cancel reservation RES-1234"
-
-    reservation_id = reservation_match.group(0)
-
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        cur.execute(
-            "DELETE FROM reservations WHERE id = %s",
-            (reservation_id,)
-        )
-
-        deleted_rows = cur.rowcount
-
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        if deleted_rows == 0:
-            return f"No reservation found with ID {reservation_id}"
-
-        return f"✅ Reservation {reservation_id} has been cancelled successfully."
-
-    except Exception as e:
-        print(f"Database Error: {e}")
-        return "Error cancelling reservation."
-
-def update_reservation(user_message):
-
-    reservation_match = re.search(
-        r'RES-\w+',
-        user_message,
-        re.IGNORECASE
-    )
-
-    if not reservation_match:
-        return "Please provide a reservation ID."
-
-    reservation_id = reservation_match.group(0)
-
-    new_time = None
-    new_date = None
-    new_party_size = None
-
-    # Party Size
-
-    people_match = re.search(
-        r'(\d+)\s*(people|person|guests?)',
-        user_message,
-        re.IGNORECASE
-    )
-
-    party_match = re.search(
-        r'party\s*_?\s*size.*?to\s*(\d+)',
-        user_message,
-        re.IGNORECASE
-    )
-
-    if people_match:
-        new_party_size = int(people_match.group(1))
-
-    elif party_match:
-        new_party_size = int(party_match.group(1))
-
-
-    # Date
-    if "today" in user_message.lower():
-        new_date = datetime.now().strftime("%Y-%m-%d")
-
-    elif "tomorrow" in user_message.lower():
-        new_date = (
-            datetime.now() + timedelta(days=1)
-        ).strftime("%Y-%m-%d")
-
-    # Time
-    time_matches = re.findall(
-        r'(\d{1,2}\s*(?:am|pm))',
-        user_message,
-        re.IGNORECASE
-    )
-
-    if time_matches:
-        new_time = time_matches[-1]
-        
-    update_fields = []
-    values = []
-
-    if new_time:
-        update_fields.append("time = %s")
-        values.append(new_time)
-
-    if new_date:
-        update_fields.append("date = %s")
-        values.append(new_date)
-
-    if new_party_size:
-        update_fields.append("party_size = %s")
-        values.append(new_party_size)
-
-    if not update_fields:
-        return "Please provide something to update."
-
-    values.append(reservation_id)
-
-    query = f"""
-        UPDATE reservations
-        SET {', '.join(update_fields)}
-        WHERE id = %s
-    """
-
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        cur.execute(query, values)
-
-        updated_rows = cur.rowcount
-
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        if updated_rows == 0:
-            return f"No reservation found with ID {reservation_id}"
-
-        return f"✅ Reservation {reservation_id} updated successfully."
-
-    except Exception as e:
-        print(f"Database Error: {e}")
-        return "Error updating reservation."   
-
-def handle_hours():
-    """Return restaurant hours"""
+def handle_hours_request():
+    """Return hours with AI enhancement"""
     hours_text = "\n".join([f"{day}: {hours}" for day, hours in RESTAURANT_DATA["hours"].items()])
-    return f"📋 {RESTAURANT_DATA['name']} Hours:\n{hours_text}\n\nPhone: {RESTAURANT_DATA['phone']}"
+    
+    prompt = f"""You are a helpful restaurant assistant.
+A customer asked about restaurant hours.
+Here are our hours:
+{hours_text}
 
-def handle_menu():
-    """Return menu"""
-    menu_text = f"🍽️ {RESTAURANT_DATA['name']} Menu\n\n"
-    for category, items in RESTAURANT_DATA["menu"].items():
-        menu_text += f"{category.upper()}:\n"
-        for item in items:
-            menu_text += f"  • {item['name']} - {item['price']}\n"
-        menu_text += "\n"
-    return menu_text
+Phone: {RESTAURANT_DATA['phone']}
 
-def process_message(user_message):
-
-    """Process user message and return response"""
-
-    print(f"📝 Message received: {user_message}")
-
-    intent = detect_intent(user_message)
-    print(f"🤖 Intent detected: {intent}")
-
-    if intent == "cancel_reservation":
-        response = cancel_reservation(user_message)
-
-    elif intent == "update_reservation":
-        response = update_reservation(user_message)
-
-
-    elif intent == "reservation":
-        info = extract_reservation_info(user_message)
-        print(f"📋 Extracted: {info}")
-        response = handle_reservation(info)
-
-    elif intent == "hours":
-        response = handle_hours()
-
-    elif intent == "menu":
-        response = handle_menu()
-
+Give a friendly response about our hours (2-3 sentences)."""
+    
+    response = get_ollama_response(prompt)
+    if response:
+        return response
     else:
-        response = get_ai_response(user_message)
+        return f"📋 {RESTAURANT_DATA['name']} Hours:\n{hours_text}\n\nPhone: {RESTAURANT_DATA['phone']}"
 
-    print(f"📤 Response: {response[:100]}...")
+def handle_menu_request(message):
+    """Return menu with AI enhancement"""
+    menu_text = "MENU:\n"
+    for category, items in RESTAURANT_DATA["menu"].items():
+        menu_text += f"\n{category.upper()}:\n"
+        for item in items:
+            menu_text += f"  • {item['name']} - {item['price']}: {item['description']}\n"
+    
+    prompt = f"""You are a helpful restaurant assistant.
+Customer asked: "{message}"
+
+Our menu:
+{menu_text}
+
+Give a helpful response about our menu (2-4 sentences)."""
+    
+    response = get_ollama_response(prompt)
+    if response:
+        return response
+    else:
+        return menu_text
+
+def process_message_with_ai(user_message, customer=None):
+    """Process message using AI"""
+    print(f"📝 Message: {user_message}")
+    
+    intent = detect_intent(user_message)
+    print(f"🎯 Intent: {intent}")
+    
+    info = extract_reservation_info(user_message)
+    
+    if intent == "greeting":
+        # Skip the AI call for plain greetings - instant reply
+        response = "How can I help you today? I can book a table, share our hours, or walk you through the menu."
+    elif intent == "reservation":
+        response = handle_reservation_request(user_message, customer, info)
+    elif intent == "hours":
+        response = handle_hours_request()
+    elif intent == "menu":
+        response = handle_menu_request(user_message)
+    else:
+        # General question - use AI
+        prompt = f"""You are a helpful assistant for {RESTAURANT_DATA['name']} restaurant.
+Customer asked: "{user_message}"
+
+Our details:
+- Phone: {RESTAURANT_DATA['phone']}
+- Email: {RESTAURANT_DATA['email']}
+- Address: {RESTAURANT_DATA['address']}
+
+Help them! Keep response short (2-3 sentences)."""
+        
+        response = get_ollama_response(prompt)
+        if not response:
+            response = f"I'm here to help! Call us at {RESTAURANT_DATA['phone']} for more information."
+    
     return response
 
 # ============================================================================
@@ -532,7 +673,7 @@ def health_check():
 
 @app.route('/api/chat', methods=['POST'])
 def handle_chat():
-    """Chat endpoint"""
+    """Chat endpoint with customer recognition (phone + email)"""
     print("\n🟢 CHAT ENDPOINT CALLED")
     try:
         data = request.get_json()
@@ -544,16 +685,84 @@ def handle_chat():
         
         global conversation
         conversation.append({"role": "user", "content": user_message})
+
+        # ✅ CUSTOMER RECOGNITION (Phone + Email)
+        name = extract_name_from_message(user_message)
+        phone = extract_phone_from_message(user_message)
+        email = extract_email_from_message(user_message)
         
-        # Process message
-        response = process_message(user_message)
+        print(f"👤 Extracted name: {name}")
+        print(f"📱 Extracted phone: {phone}")
+        print(f"📧 Extracted email: {email}")
         
-        conversation.append({"role": "assistant", "content": response})
+        # Recognize customer by name + phone + email
+        customer = recognize_customer(name, phone, email)
+        
+        greeting_text = ""
+        recommendations_text = ""
+        history_text = ""
+        
+        if customer:
+            # ✅ RETURNING CUSTOMER
+            print(f"✅ Returning customer: {customer['name']}")
+            greeting_text = get_greeting(customer) + "\n\n"
+            
+            # Add history
+            history = get_history(customer['name'])
+            if history:
+                history_text = "📋 Your Past Reservations:\n"
+                for res in history:
+                    history_text += f"  • {res['reservation_date']} at {res['reservation_time']} - Party of {res['party_size']}\n"
+                history_text += "\n"
+            
+            # Add recommendations
+            recommendations_text = get_recommendations(customer) + "\n\n"
+        else:
+            # ✅ NEW CUSTOMER
+            if name:
+                print(f"ℹ️ New customer: {name}")
+                greeting_text = f"Welcome, {name}! 👋 Welcome to Srija's Taste! 🍽️\n\n"
+            else:
+                greeting_text = "Welcome to Srija's Taste! 🍽️\n\n"
+        
+        # Process message with AI
+        response = process_message_with_ai(user_message, customer)
+        
+        # Combine greeting/recommendations/history with AI response
+        final_response = greeting_text + recommendations_text + history_text + response
+
+        conversation.append({"role": "assistant", "content": final_response})
+
+        # ✅ SAVE TO CHAT_HISTORY TABLE
+        try:
+            conn = get_db_connection()
+            if conn:
+                cur = conn.cursor()
+                intent = detect_intent(user_message)
+                cur.execute("""
+                    INSERT INTO chat_history (customer_name, user_message, bot_response, intent)
+                    VALUES (%s, %s, %s, %s)
+                """, (name, user_message, final_response, intent))
+                conn.commit()
+                cur.close()
+                print("✅ Chat history saved!")
+                conn.close()
+        except Exception as e:
+            print(f"❌ Error saving chat history: {e}")
+
+        print(f"📤 Response generated\n")
         
         return jsonify({
-            'response': response,
+            'response': final_response,
             'success': True,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'is_returning_customer': customer is not None,
+            'customer_name': customer['name'] if customer else None,
+            'extracted': {
+                'name': name,
+                'phone': phone,
+                'email': email
+            }
         }), 200
         
     except Exception as e:
@@ -562,44 +771,46 @@ def handle_chat():
 
 @app.route('/api/reservations', methods=['GET'])
 def get_reservations():
-
+    """Get all reservations"""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Database error', 'success': False}), 500
+    
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
+        cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("""
-            SELECT id, name, party_size, date, time
+            SELECT reservation_id, customer_name, email, phone, party_size, reservation_date, reservation_time
             FROM reservations
             ORDER BY created_at DESC
         """)
-
-        result = cur.fetchall()
-
+        reservations = cur.fetchall()
         cur.close()
+        
+        return jsonify({'reservations': reservations, 'success': True}), 200
+    except Exception as e:
+        return jsonify({'error': str(e), 'success': False}), 500
+    finally:
         conn.close()
 
-        reservations = [
-            {
-                'id': row[0],
-                'name': row[1],
-                'party_size': row[2],
-                'date': row[3],
-                'time': row[4],
-            }
-            for row in result
-        ]
-
-        return jsonify({
-            'reservations': reservations,
-            'success': True
-        }), 200
-
-    except Exception as e:
-        return jsonify({
-            'error': str(e),
-            'success': False
-        }), 500
+@app.route('/api/customers', methods=['GET'])
+def get_customers():
+    """Get all customers (for admin)"""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Database error', 'success': False}), 500
     
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT * FROM customers ORDER BY visits DESC")
+        customers = cur.fetchall()
+        cur.close()
+        
+        return jsonify({'customers': customers, 'success': True}), 200
+    except Exception as e:
+        return jsonify({'error': str(e), 'success': False}), 500
+    finally:
+        conn.close()
+
 @app.route('/api/chat/reset', methods=['POST'])
 def reset_chat():
     """Reset conversation"""
@@ -626,12 +837,14 @@ def server_error(error):
 if __name__ == '__main__':
     print("\n" + "="*70)
     print("🍽️  RESTAURANT CHATBOT API")
+    print("POSTGRESQL + OLLAMA + PHONE + EMAIL RECOGNITION")
     print("="*70 + "\n")
     
     init_database()
     
     print("🚀 Starting Flask API...")
     print("📍 API URL: http://localhost:5000")
-    print("📍 Chat endpoint: POST http://localhost:5000/api/chat\n")
+    print("📍 Using OLLAMA AI on port 11434")
+    print("📍 Using PostgreSQL for database\n")
     
     app.run(host='0.0.0.0', port=5000, debug=True)

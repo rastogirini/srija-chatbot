@@ -11,6 +11,7 @@ import SignUpForm from "./pages/FiveStepsForm/SignUpForm";
 import TemplateSelector from "./pages/FiveStepsForm/TemplateSelector";
 import LandingHero from "./pages/LandingHero";
 import NotFound from "./pages/OtherPage/NotFound";
+import FloatingChatbot from "./components/FloatingChatbot";
 
 function App() {
   return (
