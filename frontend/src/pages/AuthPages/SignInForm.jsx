@@ -10,6 +10,7 @@ export default function SignInForm() {
    const navigate = useNavigate();
   const [isChecked, setIsChecked] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [name, setName] = useState("");
   return (
     <div className="flex flex-col flex-1">
       {/* <div className="w-full max-w-md pt-10 mx-auto">
@@ -24,8 +25,22 @@ export default function SignInForm() {
       <div className="flex flex-col justify-center flex-1 w-full max-w-md mx-auto">
         <div>
           <div className="mb-5 sm:mb-8">
-            <h1 className="mb-2 font-semibold text-gray-800 text-title-sm dark:text-white/90 sm:text-title-md">
-              Sign In
+            <div className="flex items-center gap-2 mb-2">
+              <span style={{ width: '18px', height: '2px', background: '#4361ee', display: 'inline-block' }}></span>
+              <span className="text-xs font-bold tracking-widest uppercase" style={{ color: '#4361ee' }}>
+                Welcome Back
+              </span>
+            </div>
+            <h1 className="mb-1.5 font-bold text-gray-800 dark:text-white/90" style={{ fontSize: '30px' }}>
+              Sign In to Your{' '}
+              <span style={{
+                background: 'linear-gradient(135deg, #4361ee 0%, #d6336c 100%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text',
+              }}>
+                Account
+              </span>
             </h1>
             <p className="text-sm text-gray-500 dark:text-gray-400">
               Enter your email and password to sign in!
@@ -88,6 +103,16 @@ export default function SignInForm() {
               <div className="space-y-6">
                 <div>
                   <Label>
+                    Name <span className="text-error-500">*</span>{" "}
+                  </Label>
+                  <Input
+                    placeholder="e.g. Sita"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <Label>
                     Email <span className="text-error-500">*</span>{" "}
                   </Label>
                   <Input placeholder="info@gmail.com" />
@@ -127,19 +152,33 @@ export default function SignInForm() {
                     Forgot password?
                   </Link>
                 </div>
-                <div>
+                <div className="space-y-2">
                   <Button
                     className="w-full"
                     size="sm"
-                    onClick={() => navigate("dashboard")}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      navigate("/select-persona", { state: { name } });
+                    }}
                   >
                     Sign in
+                  </Button>
+                  <Button
+                    className="w-full"
+                    size="sm"
+                    variant="outline"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      navigate("/chat");
+                    }}
+                  >
+                    Continue as Guest
                   </Button>
                 </div>
               </div>
             </form>
 
-            {/* <div className="mt-5">
+            <div className="mt-5">
               <p className="text-sm font-normal text-center text-gray-700 dark:text-gray-400 sm:text-start">
                 Don&apos;t have an account? {""}
                 <Link
@@ -149,7 +188,7 @@ export default function SignInForm() {
                   Sign Up
                 </Link>
               </p>
-            </div> */}
+            </div>
           </div>
         </div>
       </div>
