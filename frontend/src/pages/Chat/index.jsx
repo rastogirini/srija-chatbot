@@ -269,7 +269,7 @@ const Chat = () => {
       id: 12,
       name: 'Gulab Jamun',
       price: '₹220',
-      image: 'https://theartisticcook.com/wp-content/uploads/2024/10/Gulab-Jamun-with-Milk-Powder.jpg',
+      image: 'https://images.unsplash.com/photo-1595608010652-d8bf1103a1c5?w=400&h=300&fit=crop',
       description: 'Sweet dumplings in rose syrup',
       category: 'DESSERT',
       cuisine: 'indian',
@@ -718,7 +718,7 @@ const Chat = () => {
           {/* Cart */}
           <div style={{ position: 'relative' }}>
             <button
-              onClick={() => { setOrderConfirmation(null); setShowCartPage(true); }}
+              onClick={() => { setViewingProduct(null); setOrderConfirmation(null); setShowCartPage(true); }}
               title="Cart"
               style={{
                 position: 'relative',
@@ -1585,7 +1585,7 @@ const Chat = () => {
         cart={cart}
         onAddToCart={addToCart}
         onDecreaseQty={decreaseQty}
-        onShowCart={() => { setOrderConfirmation(null); setShowCartPage(true); }}
+        onShowCart={() => { setViewingProduct(null); setOrderConfirmation(null); setShowCartPage(true); }}
       />
     </div>
   );
