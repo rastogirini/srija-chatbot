@@ -33,11 +33,44 @@ export default function SignUpForm() {
   const navigate = useNavigate();
   const [selectedInterests, setSelectedInterests] = useState(["food"]);
   const [firstName, setFirstName] = useState("");
+  const [email, setEmail] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
   const toggleInterest = (id) => {
     setSelectedInterests((prev) =>
       prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
     );
+  };
+
+  const handleSignUp = async (e) => {
+    e.preventDefault();
+    setError("");
+
+    if (!firstName.trim() || !email.trim()) {
+      setError("Please enter your name and email.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch("http://localhost:5000/api/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: firstName.trim(), email: email.trim(), interests: selectedInterests }),
+      });
+      const data = await response.json();
+
+      if (data.success) {
+        navigate("/select-persona", { state: { name: data.customer.name, email: data.customer.email, interests: data.customer.interests } });
+      } else {
+        setError(data.error || "Could not create your account. Please try again.");
+      }
+    } catch (err) {
+      setError("Connection error. Please make sure the server is running.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -66,14 +99,14 @@ export default function SignUpForm() {
           </p>
         </div>
 
-        <form onSubmit={(e) => { e.preventDefault(); navigate("/select-persona", { state: { name: firstName } }); }}>
+        <form onSubmit={handleSignUp}>
           <div className="grid grid-cols-2 gap-3 mb-3">
             <Input placeholder="First name" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
             <Input placeholder="Last name" />
           </div>
 
           <div className="mb-4">
-            <Input placeholder="Email address" />
+            <Input type="email" placeholder="Email address" value={email} onChange={(e) => setEmail(e.target.value)} />
           </div>
 
           <div className="mb-2 text-xs font-semibold tracking-wide text-gray-400 uppercase dark:text-gray-500">
@@ -113,12 +146,17 @@ export default function SignUpForm() {
             })}
           </div>
 
+          {error && (
+            <p className="mb-3 text-sm text-error-500">{error}</p>
+          )}
+
           <button
             type="submit"
-            className="w-full py-3.5 rounded-full text-white font-bold text-sm tracking-wide uppercase flex items-center justify-center gap-2"
+            disabled={loading}
+            className="w-full py-3.5 rounded-full text-white font-bold text-sm tracking-wide uppercase flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             style={{ background: "linear-gradient(135deg, #4361ee 0%, #d6336c 100%)" }}
           >
-            Create Account <span>→</span>
+            {loading ? "Creating account..." : (<>Create Account <span>→</span></>)}
           </button>
         </form>
 

@@ -9,7 +9,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 from db import init_database
-from customers import list_customers
+from customers import list_customers, find_customer_by_login, find_customer_by_email, save_customer
 from reservations import list_reservations
 from orders import place_order, list_orders
 from chatbot_graph import run_chat
@@ -18,6 +18,14 @@ app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": ["http://localhost:3000", "http://localhost:5173"]}})
 
 conversation = []
+
+
+def _parse_interests(interests_str):
+    """`interests` is stored comma-joined in the DB - split back to a list
+    for the frontend, dropping any empty entries."""
+    if not interests_str:
+        return []
+    return [i for i in interests_str.split(",") if i]
 
 # ============================================================================
 # API ENDPOINTS
@@ -53,6 +61,7 @@ def handle_chat():
             hint_email=data.get('customer_email'),
             already_greeted=bool(data.get('already_greeted')),
             history=data.get('history', []),
+            interests=data.get('interests'),
         )
         final_response = result["final_response"]
 
@@ -73,6 +82,70 @@ def handle_chat():
             },
             'makeup_products': result.get("makeup_products", []),
         }), 200
+
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return jsonify({'error': str(e), 'success': False}), 500
+
+@app.route('/api/login', methods=['POST'])
+def login():
+    """Validate a real sign-in against the customers table - name and email
+    must both match an existing customer row. Replaces the old fixed-3-
+    persona demo matching, which silently fell back to the first persona
+    (Sita) for any unrecognized name."""
+    try:
+        data = request.get_json()
+        name = (data.get('name') or '').strip()
+        email = (data.get('email') or '').strip()
+
+        if not name or not email:
+            return jsonify({'error': 'Name and email are required', 'success': False}), 400
+
+        customer = find_customer_by_login(name, email)
+        if not customer:
+            return jsonify({
+                'error': "We couldn't find an account with that name and email. Check your details, or sign up.",
+                'success': False,
+            }), 404
+
+        return jsonify({
+            'success': True,
+            'customer': {
+                'name': customer['name'],
+                'email': customer['email'],
+                'phone': customer['phone'],
+                'interests': _parse_interests(customer.get('interests')),
+            },
+        }), 200
+
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return jsonify({'error': str(e), 'success': False}), 500
+
+@app.route('/api/signup', methods=['POST'])
+def signup():
+    """Create a new customer account (name + email + interests)."""
+    try:
+        data = request.get_json()
+        name = (data.get('name') or '').strip()
+        email = (data.get('email') or '').strip()
+        interests = data.get('interests') or []
+
+        if not name or not email:
+            return jsonify({'error': 'Name and email are required', 'success': False}), 400
+
+        existing = find_customer_by_email(email)
+        if existing and existing['name'].strip().lower() != name.lower():
+            return jsonify({
+                'error': 'That email is already registered under a different name. Try signing in instead.',
+                'success': False,
+            }), 409
+
+        customer_id = save_customer(name, email, interests=interests)
+        if not customer_id:
+            return jsonify({'error': 'Could not create account', 'success': False}), 500
+
+        return jsonify({'success': True, 'customer': {'name': name, 'email': email, 'interests': interests}}), 200
 
     except Exception as e:
         print(f"❌ Error: {e}")

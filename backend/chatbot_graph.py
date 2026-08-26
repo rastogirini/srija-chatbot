@@ -28,6 +28,7 @@ class ChatState(TypedDict, total=False):
     hint_phone: Optional[str]
     hint_email: Optional[str]
     already_greeted: bool
+    interests: Optional[list]
     extracted_name: Optional[str]
     extracted_phone: Optional[str]
     extracted_email: Optional[str]
@@ -77,19 +78,31 @@ def build_customer_context(state: ChatState) -> ChatState:
         # not this person has a real DB row (e.g. a persona with no history yet).
         return {"greeting_text": "", "history_text": "", "recommendations_text": ""}
 
+    # A customer row existing doesn't make someone a "returning" customer for
+    # greeting purposes - `visits` is the real signal (get_greeting already
+    # keys its "Hi, {name}!" vs "Welcome back...!" split off the same
+    # number). Without this check, a brand-new signup with a matching row
+    # (or old leftover reservation from prior testing under that name) would
+    # get shown fabricated-feeling "Personalized Recommendations" and past
+    # history on their very first hello - which reads as untrustworthy,
+    # especially when it's generic filler like "You loved None last time!".
+    is_returning_visitor = bool(customer) and customer.get("visits", 1) > 1
+
     if customer:
-        print(f"✅ Returning customer: {customer['name']}")
+        print(f"✅ Recognized customer: {customer['name']} (visits={customer.get('visits', 1)})")
         greeting_text = get_greeting(customer) + "\n\n"
 
         history_text = ""
-        history = get_history(customer["name"])
-        if history:
-            history_text = "📋 Your Past Reservations:\n"
-            for res in history:
-                history_text += f"  • {res['date']} at {res['time']} - Party of {res['party_size']}\n"
-            history_text += "\n"
+        recommendations_text = ""
+        if is_returning_visitor:
+            history = get_history(customer["name"])
+            if history:
+                history_text = "📋 Your Past Reservations:\n"
+                for res in history:
+                    history_text += f"  • {res['date']} at {res['time']} - Party of {res['party_size']}\n"
+                history_text += "\n"
 
-        recommendations_text = get_recommendations(customer) + "\n\n"
+            recommendations_text = get_recommendations(customer) + "\n\n"
     else:
         if name:
             print(f"ℹ️ New customer: {name}")
@@ -121,7 +134,27 @@ def route_by_intent(state: ChatState) -> str:
 
 
 def handle_greeting_node(state: ChatState) -> ChatState:
-    return {"ai_response": "How can I help you today? I can help you book a table or explore the menu — or find your next favorite beauty pick, from lipstick to skincare."}
+    # No interests on file (guest, "Continue as Guest", legacy account) -
+    # offer everything, same as before interests existed. Known interests
+    # narrow the pitch to what the customer actually opted into at sign-up,
+    # so a food+travel customer isn't pitched beauty products they never
+    # asked about.
+    interests = state.get("interests")
+    knows_interests = bool(interests)
+    wants_food = (not knows_interests) or ("food" in interests)
+    wants_beauty = (not knows_interests) or ("beauty" in interests)
+
+    offerings = []
+    if wants_food:
+        offerings.append("book a table or explore the menu")
+    if wants_beauty:
+        offerings.append("find your next favorite beauty pick, from lipstick to skincare")
+    if not offerings:
+        # Interests known but none of them map to anything we actually
+        # offer (e.g. only travel/fitness picked) - fall back to food.
+        offerings.append("book a table or explore the menu")
+
+    return {"ai_response": f"How can I help you today? I can help you {' — or '.join(offerings)}."}
 
 
 def handle_reservation_node(state: ChatState) -> ChatState:
@@ -245,7 +278,7 @@ def _build_graph():
 _graph = _build_graph()
 
 
-def run_chat(user_message: str, hint_name: str = None, hint_phone: str = None, hint_email: str = None, already_greeted: bool = False, history: list = None) -> ChatState:
+def run_chat(user_message: str, hint_name: str = None, hint_phone: str = None, hint_email: str = None, already_greeted: bool = False, history: list = None, interests: list = None) -> ChatState:
     return _graph.invoke({
         "user_message": user_message,
         "hint_name": hint_name,
@@ -253,4 +286,5 @@ def run_chat(user_message: str, hint_name: str = None, hint_phone: str = None, h
         "hint_email": hint_email,
         "already_greeted": already_greeted,
         "history": history or [],
+        "interests": interests,
     })

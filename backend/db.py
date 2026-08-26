@@ -36,11 +36,16 @@ def init_database():
                 favorite_table VARCHAR(50),
                 favorite_time VARCHAR(20),
                 favorite_dishes TEXT,
+                interests VARCHAR(200),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(name, phone, email)
             )
         """)
+
+        # Existing databases from before `interests` existed won't get it from
+        # CREATE TABLE IF NOT EXISTS above - add it separately so upgrades work.
+        cur.execute("ALTER TABLE customers ADD COLUMN IF NOT EXISTS interests VARCHAR(200)")
 
         # Create reservations table
         # NOTE: schema intentionally matches the columns handle_reservation_request

@@ -135,10 +135,13 @@ def get_recommendations(customer):
     return recommendations
 
 
-def save_customer(name, email=None, phone=None, favorite_table=None, favorite_dishes=None, favorite_time=None):
-    """Save or update customer and return customer_id"""
+def save_customer(name, email=None, phone=None, favorite_table=None, favorite_dishes=None, favorite_time=None, interests=None):
+    """Save or update customer and return customer_id. `interests` is a list
+    of strings (e.g. ['food', 'beauty']), stored comma-joined."""
     if not name:
         return None
+
+    interests_str = ",".join(interests) if interests else None
 
     conn = get_db_connection()
     if not conn:
@@ -147,15 +150,21 @@ def save_customer(name, email=None, phone=None, favorite_table=None, favorite_di
     try:
         cur = conn.cursor()
 
-        # Check if customer exists
+        # Check if customer exists. `IS NOT DISTINCT FROM` (not `=`) for
+        # phone/email - `x = NULL` is never true in SQL, even when both
+        # sides are NULL, so a customer with no phone/email on file (e.g.
+        # a persona login with just a name) would never match its own
+        # previously-inserted row and get a fresh duplicate every time.
         cur.execute(
-            "SELECT id FROM customers WHERE name = %s AND phone = %s AND email = %s",
+            "SELECT id FROM customers WHERE LOWER(name) = LOWER(%s) AND phone IS NOT DISTINCT FROM %s AND email IS NOT DISTINCT FROM %s",
             (name, phone, email)
         )
         existing = cur.fetchone()
 
         if existing:
-            # Update visits AND preferences
+            # Update visits AND preferences. `COALESCE(%s, interests)` so a
+            # call that doesn't know about interests (e.g. from placing an
+            # order) doesn't wipe out what was captured at sign-up.
             customer_id = existing[0]
             cur.execute("""
                 UPDATE customers
@@ -163,16 +172,17 @@ def save_customer(name, email=None, phone=None, favorite_table=None, favorite_di
                     favorite_table = %s,
                     favorite_dishes = %s,
                     favorite_time = %s,
+                    interests = COALESCE(%s, interests),
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = %s
-            """, (favorite_table, favorite_dishes, favorite_time, customer_id))
+            """, (favorite_table, favorite_dishes, favorite_time, interests_str, customer_id))
         else:
             # Add new customer WITH preferences
             cur.execute("""
-                INSERT INTO customers (name, email, phone, favorite_table, favorite_dishes, favorite_time)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO customers (name, email, phone, favorite_table, favorite_dishes, favorite_time, interests)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
-            """, (name, email, phone, favorite_table, favorite_dishes, favorite_time))
+            """, (name, email, phone, favorite_table, favorite_dishes, favorite_time, interests_str))
             customer_id = cur.fetchone()[0]
 
         conn.commit()
@@ -185,6 +195,56 @@ def save_customer(name, email=None, phone=None, favorite_table=None, favorite_di
     except Exception as e:
         print(f"❌ Error saving customer: {e}")
         return None
+
+
+def find_customer_by_login(name, email):
+    """Look up a customer by an exact name+email pair - used to validate a
+    real sign-in, as opposed to recognize_customer's best-effort matching
+    used mid-conversation."""
+    if not name or not email:
+        return None
+
+    conn = get_db_connection()
+    if not conn:
+        return None
+
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            "SELECT * FROM customers WHERE LOWER(name) = LOWER(%s) AND LOWER(email) = LOWER(%s)",
+            (name, email)
+        )
+        customer = cur.fetchone()
+        cur.close()
+        return customer
+    except Exception as e:
+        print(f"❌ Error finding customer by login: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def find_customer_by_email(email):
+    """Look up a customer by email alone - used at sign-up time to detect
+    an email already registered under a different name."""
+    if not email:
+        return None
+
+    conn = get_db_connection()
+    if not conn:
+        return None
+
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT * FROM customers WHERE LOWER(email) = LOWER(%s)", (email,))
+        customer = cur.fetchone()
+        cur.close()
+        return customer
+    except Exception as e:
+        print(f"❌ Error finding customer by email: {e}")
+        return None
+    finally:
+        conn.close()
 
 
 def list_customers():

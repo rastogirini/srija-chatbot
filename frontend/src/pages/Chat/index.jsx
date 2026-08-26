@@ -5,6 +5,13 @@ import ProductDetail from '../../components/ProductDetail';
 import CartPage from '../../components/CartPage';
 import QtyStepper from '../../components/QtyStepper';
 
+// Display metadata for sign-up interests that don't have a real section
+// built yet - used to label their "Coming Soon" placeholder.
+const UNBUILT_INTEREST_META = {
+  travel: { icon: '✈️', label: 'Travel' },
+  fitness: { icon: '💪', label: 'Fitness' },
+};
+
 // Classic Indian menu veg/non-veg mark: a green or red square with a filled
 // dot inside, same convention used in the chatbot and the product detail page.
 const VegIndicator = ({ isVeg, size = 16 }) => (
@@ -55,6 +62,17 @@ const Chat = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const selectedPersona = location.state?.persona;
+  const selectedEmail = location.state?.email;
+  const selectedInterests = location.state?.interests;
+
+  // Unknown interests (guest, no sign-up) shows everything, same as before
+  // interests existed. Known interests hide whatever category wasn't picked,
+  // and any *other* picked interest with no real section yet (travel,
+  // fitness) gets a "Coming Soon" placeholder instead of just vanishing.
+  const knowsInterests = selectedInterests && selectedInterests.length > 0;
+  const wantsFood = !knowsInterests || selectedInterests.includes('food');
+  const wantsBeauty = !knowsInterests || selectedInterests.includes('beauty');
+  const unbuiltInterests = knowsInterests ? selectedInterests.filter(i => i !== 'food' && i !== 'beauty') : [];
 
   useEffect(() => {
     try {
@@ -111,6 +129,7 @@ const Chat = () => {
           items: cart,
           total: cartTotal,
           customer_name: selectedPersona,
+          customer_email: selectedEmail,
         }),
       });
       const data = await response.json();
@@ -668,46 +687,58 @@ const Chat = () => {
                 background: 'white',
                 borderRadius: '8px',
                 boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                minWidth: '160px',
+                minWidth: '180px',
                 zIndex: 200,
                 overflow: 'hidden'
               }}>
-                <button
-                  onClick={() => scrollToSection('food-section')}
-                  style={{
-                    width: '100%',
-                    padding: '12px 20px',
-                    textAlign: 'left',
-                    border: 'none',
-                    background: 'none',
-                    cursor: 'pointer',
-                    color: '#333',
-                    fontWeight: '500',
-                    fontSize: '14px'
-                  }}
-                  onMouseEnter={(e) => { e.target.style.background = '#f5f5f5'; }}
-                  onMouseLeave={(e) => { e.target.style.background = 'none'; }}
-                >
-                  🍽️ Food
-                </button>
-                <button
-                  onClick={() => scrollToSection('makeup-section')}
-                  style={{
-                    width: '100%',
-                    padding: '12px 20px',
-                    textAlign: 'left',
-                    border: 'none',
-                    background: 'none',
-                    cursor: 'pointer',
-                    color: '#333',
-                    fontWeight: '500',
-                    fontSize: '14px'
-                  }}
-                  onMouseEnter={(e) => { e.target.style.background = '#f5f5f5'; }}
-                  onMouseLeave={(e) => { e.target.style.background = 'none'; }}
-                >
-                  💄 Makeup
-                </button>
+                {(() => {
+                  // Only Food and Makeup have a real section on the page -
+                  // Travel/Fitness are sign-up interests with nothing built
+                  // yet, so they show as a disabled "Coming Soon" entry
+                  // instead of a dead link, only when actually picked as an
+                  // interest (no point showing them unprompted).
+                  const SHOP_MENU_ITEMS = [
+                    { key: 'food', icon: '🍽️', label: 'Food', sectionId: 'food-section' },
+                    { key: 'beauty', icon: '💄', label: 'Makeup', sectionId: 'makeup-section' },
+                    { key: 'travel', icon: '✈️', label: 'Travel', comingSoon: true },
+                    { key: 'fitness', icon: '💪', label: 'Fitness', comingSoon: true },
+                  ];
+                  const knowsInterests = selectedInterests && selectedInterests.length > 0;
+                  const items = knowsInterests
+                    ? SHOP_MENU_ITEMS.filter(item => selectedInterests.includes(item.key))
+                    : SHOP_MENU_ITEMS.filter(item => !item.comingSoon);
+
+                  return items.map(item => (
+                    <button
+                      key={item.key}
+                      onClick={() => !item.comingSoon && scrollToSection(item.sectionId)}
+                      disabled={item.comingSoon}
+                      style={{
+                        width: '100%',
+                        padding: '12px 20px',
+                        textAlign: 'left',
+                        border: 'none',
+                        background: 'none',
+                        cursor: item.comingSoon ? 'default' : 'pointer',
+                        color: item.comingSoon ? '#aaa' : '#333',
+                        fontWeight: '500',
+                        fontSize: '14px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                      }}
+                      onMouseEnter={(e) => { if (!item.comingSoon) e.currentTarget.style.background = '#f5f5f5'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; }}
+                    >
+                      <span>{item.icon} {item.label}</span>
+                      {item.comingSoon && (
+                        <span style={{ fontSize: '10px', fontWeight: '700', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                          Soon
+                        </span>
+                      )}
+                    </button>
+                  ));
+                })()}
               </div>
             )}
           </div>
@@ -993,6 +1024,7 @@ const Chat = () => {
       {/* Content Section */}
       <div style={{ padding: '60px 40px', maxWidth: '1400px', margin: '0 auto' }}>
         {/* Menu Section */}
+        {wantsFood && (
         <div id="food-section" style={{ marginBottom: '60px' }}>
           <h3 style={{ fontSize: '32px', margin: '0 0 30px 0', color: '#333' }}>
             Food & Dining
@@ -1322,7 +1354,40 @@ const Chat = () => {
             </div>
           )}
         </div>
+        )}
 
+        {/* Interests picked at sign-up with no real section built yet
+            (Travel, Fitness, ...) - a placeholder instead of just vanishing,
+            so the interest is at least acknowledged. */}
+        {unbuiltInterests.map(interest => {
+          const meta = UNBUILT_INTEREST_META[interest] || { icon: '✨', label: interest };
+          return (
+            <div key={interest} style={{ marginBottom: '60px' }}>
+              <h3 style={{ fontSize: '32px', margin: '0 0 30px 0', color: '#333' }}>
+                {meta.icon} {meta.label}
+              </h3>
+              <div style={{
+                padding: '80px 20px',
+                textAlign: 'center',
+                background: 'white',
+                borderRadius: '12px',
+                border: '2px dashed #ddd',
+                color: '#999',
+              }}>
+                <div style={{ fontSize: '40px', marginBottom: '12px' }}>🚧</div>
+                <p style={{ fontSize: '20px', fontWeight: '700', color: '#666', margin: '0 0 6px' }}>
+                  Coming Soon
+                </p>
+                <p style={{ fontSize: '14px', margin: 0 }}>
+                  We're working on {meta.label.toLowerCase()} picks made just for you.
+                </p>
+              </div>
+            </div>
+          );
+        })}
+
+        {wantsBeauty && (
+        <>
         {/* Beauty & Makeup Section */}
         <div id="makeup-section" style={{ marginBottom: '60px' }}>
           <h3 style={{ fontSize: '32px', margin: '0 0 30px 0', color: '#333' }}>
@@ -1523,6 +1588,8 @@ const Chat = () => {
             </div>
           )}
         </div>
+        </>
+        )}
 
         {/* Features Section */}
         <div style={{
@@ -1580,6 +1647,8 @@ const Chat = () => {
       {/* Floating Chatbot */}
       <FloatingChatbot
         initialPersona={selectedPersona}
+        initialEmail={selectedEmail}
+        initialInterests={selectedInterests}
         onViewProduct={setViewingProduct}
         onOpenChange={setChatOpen}
         cart={cart}

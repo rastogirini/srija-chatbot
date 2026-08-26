@@ -1,46 +1,56 @@
 import { useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
-const PERSONAS = [
-  {
-    name: 'Sita',
+// A few known customers get a themed card as a nice touch - anyone else
+// (any real, logged-in customer) gets the generic default theme instead.
+// This page no longer gatekeeps on these 3 names - by the time a customer
+// lands here, /api/login has already confirmed they're a real account.
+const KNOWN_THEMES = {
+  sita: {
     tag: 'Food · Makeup',
     icons: ['🍽️', '💄'],
     accent: '#d6336c',
     bg: 'linear-gradient(135deg, #fdf1f7 0%, #fff6f0 100%)',
   },
-  {
-    name: 'Meera',
+  meera: {
     tag: 'Parent · Two Kids',
     icons: ['👪', '🧸'],
     accent: '#0ca678',
     bg: 'linear-gradient(135deg, #f0fdf7 0%, #f5fdf1 100%)',
   },
-  {
-    name: 'Priya',
+  priya: {
     tag: 'Fashion & Style',
     icons: ['👗', '👠'],
     accent: '#4361ee',
     bg: 'linear-gradient(135deg, #f0f4ff 0%, #f5f0ff 100%)',
   },
-];
+};
+
+const DEFAULT_THEME = {
+  tag: 'Your Personal Assistant',
+  icons: ['✨'],
+  accent: '#667eea',
+  bg: 'linear-gradient(135deg, #f0f4ff 0%, #fdf1f7 100%)',
+};
 
 const AUTO_CONTINUE_DELAY_MS = 5000;
 
 export default function PersonaSelect() {
   const navigate = useNavigate();
   const location = useLocation();
-  const typedName = location.state?.name?.trim().toLowerCase();
+  const name = location.state?.name?.trim() || 'Guest';
+  const email = location.state?.email;
+  const interests = location.state?.interests;
 
-  const matchedPersona =
-    PERSONAS.find((p) => p.name.toLowerCase() === typedName) || PERSONAS[0];
+  const theme = KNOWN_THEMES[name.toLowerCase()] || DEFAULT_THEME;
+  const matchedPersona = { name, ...theme };
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      navigate('/chat', { state: { persona: matchedPersona.name }, replace: true });
+      navigate('/chat', { state: { persona: matchedPersona.name, email, interests }, replace: true });
     }, AUTO_CONTINUE_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [matchedPersona.name, navigate]);
+  }, [matchedPersona.name, email, interests, navigate]);
 
   return (
     <div style={{

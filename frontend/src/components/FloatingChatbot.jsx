@@ -4,7 +4,7 @@ import './FloatingChatbot.css';
 import srijaChatBubble from '../assets/Srija_ChatBubble.png';
 import QtyStepper from './QtyStepper';
 
-export default function FloatingChatbot({ initialPersona, onViewProduct, onOpenChange, cart, onAddToCart, onDecreaseQty, onShowCart }) {
+export default function FloatingChatbot({ initialPersona, initialEmail, initialInterests, onViewProduct, onOpenChange, cart, onAddToCart, onDecreaseQty, onShowCart }) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -96,13 +96,13 @@ export default function FloatingChatbot({ initialPersona, onViewProduct, onOpenC
 
   // Auto-recognize the persona picked at sign-in so the bot greets by name
   // immediately, without the user having to type it in.
-  const fetchPersonaGreeting = async (personaName) => {
+  const fetchPersonaGreeting = async (personaName, personaEmail, personaInterests) => {
     setLoading(true);
     try {
       const response = await fetch('http://localhost:5000/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: 'hi', customer_name: personaName })
+        body: JSON.stringify({ message: 'hi', customer_name: personaName, customer_email: personaEmail, interests: personaInterests })
       });
       const data = await response.json();
       setMessages([{
@@ -111,7 +111,7 @@ export default function FloatingChatbot({ initialPersona, onViewProduct, onOpenC
       }]);
       setCustomer({
         customer_name: personaName,
-        extracted: { name: personaName, phone: data.extracted?.phone, email: data.extracted?.email },
+        extracted: { name: personaName, phone: data.extracted?.phone, email: data.extracted?.email || personaEmail },
       });
     } catch (error) {
       setMessages([{ role: 'bot', content: `Welcome, ${personaName}! 🍽️ How can I help you today?` }]);
@@ -131,7 +131,7 @@ export default function FloatingChatbot({ initialPersona, onViewProduct, onOpenC
   useEffect(() => {
     if (isOpen && messages.length === 0) {
       if (initialPersona) {
-        fetchPersonaGreeting(initialPersona);
+        fetchPersonaGreeting(initialPersona, initialEmail, initialInterests);
       } else {
         setMessages([
           {
@@ -895,8 +895,15 @@ export default function FloatingChatbot({ initialPersona, onViewProduct, onOpenC
     if (suggestionCriteria) {
       const isBudgetOnly = suggestionCriteria.budget && !suggestionCriteria.mealTime && !suggestionCriteria.diet && !suggestionCriteria.cuisine;
 
+      // Don't proactively surface makeup for a customer who never said
+      // they're interested in beauty (e.g. "Budget Friendly" for a
+      // food+travel customer shouldn't come back with a lipstick). Unknown
+      // interests (guest, no sign-up) keeps the old behavior of showing both.
+      const knowsInterests = initialInterests && initialInterests.length > 0;
+      const wantsBeautySuggestions = !knowsInterests || initialInterests.includes('beauty');
+
       const foodResults = suggestDishes(suggestionCriteria).map(item => ({ ...item, kind: 'food' }));
-      const makeupResults = isBudgetOnly
+      const makeupResults = (isBudgetOnly && wantsBeautySuggestions)
         ? suggestMakeup(suggestionCriteria).map(item => ({ ...item, kind: 'makeup' }))
         : [];
       const suggestions = [...foodResults, ...makeupResults];
@@ -942,6 +949,7 @@ export default function FloatingChatbot({ initialPersona, onViewProduct, onOpenC
         body: JSON.stringify({
           message: userMessage,
           history,
+          interests: initialInterests,
           // Once we've recognized who we're talking to, keep telling the
           // backend on later messages so it doesn't have to be re-told
           // name/phone/email that were already given earlier.
@@ -1341,24 +1349,18 @@ export default function FloatingChatbot({ initialPersona, onViewProduct, onOpenC
                 message is appended to `messages` before any reply is added, so
                 `messages.length` moves past 1 right away) - not just after
                 specific reply types. */}
-            {customer && messages.length === 1 && usedQuickActions.length < 3 && !loading && (
+            {customer && messages.length === 1 && usedQuickActions.length < 2 && !loading && (
               <div className="question-cards">
-                {!usedQuickActions.includes('table') && (
-                  <button className="question-card" onClick={() => { setInput('Book my favorite corner table'); setUsedQuickActions(prev => [...prev, 'table']); }}>
-                    <span className="q-icon">💺</span>
-                    <span className="q-text">Book your favorite table?</span>
+                {!usedQuickActions.includes('salad') && (
+                  <button className="question-card" onClick={() => { setInput('Want to order some salads?'); setUsedQuickActions(prev => [...prev, 'salad']); }}>
+                    <span className="q-icon">🥗</span>
+                    <span className="q-text">Want to order some salads?</span>
                   </button>
                 )}
-                {!usedQuickActions.includes('makeup') && (
-                  <button className="question-card" onClick={() => { setInput('Do you have Velvet Matte Lipstick?'); setUsedQuickActions(prev => [...prev, 'makeup']); }}>
-                    <span className="q-icon">💄</span>
-                    <span className="q-text">Order your favorite lipstick?</span>
-                  </button>
-                )}
-                {!usedQuickActions.includes('time') && (
-                  <button className="question-card" onClick={() => { setInput('Book at 9pm'); setUsedQuickActions(prev => [...prev, 'time']); }}>
-                    <span className="q-icon">⏰</span>
-                    <span className="q-text">Book at your favorite time?</span>
+                {!usedQuickActions.includes('specialty') && (
+                  <button className="question-card" onClick={() => { setInput('Order our specialty dishes'); setUsedQuickActions(prev => [...prev, 'specialty']); }}>
+                    <span className="q-icon">⭐</span>
+                    <span className="q-text">Order our specialty dishes?</span>
                   </button>
                 )}
               </div>
@@ -1400,11 +1402,46 @@ export default function FloatingChatbot({ initialPersona, onViewProduct, onOpenC
             </button>
           </div>
 
-          {/* Quick Actions */}
+          {/* Quick Actions - capped at 3 (that's all the row has room for),
+              built by round-robin picking one pill per matched interest at a
+              time so every interest the customer actually has gets fair
+              representation, instead of just truncating a longer list and
+              silently dropping some interests entirely. Unknown interests
+              (guest, "Continue as Guest") default to food+beauty, same mix
+              as before interests existed. */}
           <div className="quick-actions">
-            <button onClick={() => setInput('Budget friendly under Rs500')}>💰 Budget Friendly</button>
-            <button onClick={() => setInput('Show lipstick options')}>💄 Lipstick</button>
-            <button onClick={() => setInput('Dinner suggestions')}>🍽️ Dinner</button>
+            {(() => {
+              const BUDGET_PILL = { key: 'budget', icon: '💰', label: 'Budget Friendly', input: 'Budget friendly under Rs500' };
+              const PILLS_BY_INTEREST = {
+                food: [
+                  { key: 'dinner', icon: '🍽️', label: 'Dinner', input: 'Dinner suggestions' },
+                  { key: 'healthy', icon: '🥗', label: 'Healthy Picks', input: 'Healthy low calorie options' },
+                ],
+                beauty: [
+                  { key: 'lipstick', icon: '💄', label: 'Lipstick', input: 'Show lipstick options' },
+                  { key: 'skincare', icon: '✨', label: 'Skincare', input: 'Show skincare options' },
+                ],
+              };
+              const knowsInterests = initialInterests && initialInterests.length > 0;
+              const matchedCategories = knowsInterests
+                ? initialInterests.filter(i => PILLS_BY_INTEREST[i])
+                : ['food', 'beauty'];
+
+              const pills = [BUDGET_PILL];
+              for (let round = 0; pills.length < 3; round++) {
+                const beforeCount = pills.length;
+                for (const category of matchedCategories) {
+                  if (pills.length >= 3) break;
+                  const pill = PILLS_BY_INTEREST[category][round];
+                  if (pill) pills.push(pill);
+                }
+                if (pills.length === beforeCount) break; // no category had anything left this round
+              }
+
+              return pills.map(pill => (
+                <button key={pill.key} onClick={() => setInput(pill.input)}>{pill.icon} {pill.label}</button>
+              ));
+            })()}
           </div>
         </div>
       )}

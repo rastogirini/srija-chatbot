@@ -11,6 +11,40 @@ export default function SignInForm() {
   const [isChecked, setIsChecked] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSignIn = async (e) => {
+    e.preventDefault();
+    setError("");
+
+    if (!name.trim() || !email.trim()) {
+      setError("Please enter both your name and email.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch("http://localhost:5000/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), email: email.trim() }),
+      });
+      const data = await response.json();
+
+      if (data.success) {
+        navigate("/select-persona", { state: { name: data.customer.name, email: data.customer.email, interests: data.customer.interests } });
+      } else {
+        setError(data.error || "Sign in failed. Please try again.");
+      }
+    } catch (err) {
+      setError("Connection error. Please make sure the server is running.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="flex flex-col flex-1">
       {/* <div className="w-full max-w-md pt-10 mx-auto">
@@ -22,16 +56,16 @@ export default function SignInForm() {
           Back to dashboard
         </Link>
       </div> */}
-      <div className="flex flex-col justify-center flex-1 w-full max-w-md mx-auto">
+      <div className="flex flex-col justify-start flex-1 w-full max-w-md mx-auto pt-6">
         <div>
-          <div className="mb-5 sm:mb-8">
-            <div className="flex items-center gap-2 mb-2">
+          <div className="mb-3">
+            <div className="flex items-center gap-2 mb-1.5">
               <span style={{ width: '18px', height: '2px', background: '#4361ee', display: 'inline-block' }}></span>
               <span className="text-xs font-bold tracking-widest uppercase" style={{ color: '#4361ee' }}>
                 Welcome Back
               </span>
             </div>
-            <h1 className="mb-1.5 font-bold text-gray-800 dark:text-white/90" style={{ fontSize: '30px' }}>
+            <h1 className="font-bold text-gray-800 dark:text-white/90" style={{ fontSize: '24px' }}>
               Sign In to Your{' '}
               <span style={{
                 background: 'linear-gradient(135deg, #4361ee 0%, #d6336c 100%)',
@@ -42,13 +76,10 @@ export default function SignInForm() {
                 Account
               </span>
             </h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              Enter your email and password to sign in!
-            </p>
           </div>
           <div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-1 sm:gap-5">
-              <button className="inline-flex items-center justify-center gap-3 py-3 text-sm font-normal text-gray-700 transition-colors bg-gray-100 rounded-lg px-7 hover:bg-gray-200 hover:text-gray-800 dark:bg-white/5 dark:text-white/90 dark:hover:bg-white/10">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-1">
+              <button className="inline-flex items-center justify-center gap-3 py-2 text-sm font-normal text-gray-700 transition-colors bg-gray-100 rounded-lg px-7 hover:bg-gray-200 hover:text-gray-800 dark:bg-white/5 dark:text-white/90 dark:hover:bg-white/10">
                 <svg
                   width="20"
                   height="20"
@@ -89,7 +120,7 @@ export default function SignInForm() {
                 Sign in with X
               </button> */}
             </div>
-            <div className="relative py-3 sm:py-5">
+            <div className="relative py-2">
               <div className="absolute inset-0 flex items-center">
                 <div className="w-full border-t border-gray-200 dark:border-gray-800"></div>
               </div>
@@ -100,7 +131,7 @@ export default function SignInForm() {
               </div>
             </div>
             <form>
-              <div className="space-y-6">
+              <div className="space-y-3">
                 <div>
                   <Label>
                     Name <span className="text-error-500">*</span>{" "}
@@ -115,7 +146,12 @@ export default function SignInForm() {
                   <Label>
                     Email <span className="text-error-500">*</span>{" "}
                   </Label>
-                  <Input placeholder="info@gmail.com" />
+                  <Input
+                    type="email"
+                    placeholder="info@gmail.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                  />
                 </div>
                 <div>
                   <Label>
@@ -152,16 +188,17 @@ export default function SignInForm() {
                     Forgot password?
                   </Link>
                 </div>
+                {error && (
+                  <p className="text-sm text-error-500">{error}</p>
+                )}
                 <div className="space-y-2">
                   <Button
                     className="w-full"
                     size="sm"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      navigate("/select-persona", { state: { name } });
-                    }}
+                    disabled={loading}
+                    onClick={handleSignIn}
                   >
-                    Sign in
+                    {loading ? "Signing in..." : "Sign in"}
                   </Button>
                   <Button
                     className="w-full"
@@ -178,7 +215,7 @@ export default function SignInForm() {
               </div>
             </form>
 
-            <div className="mt-5">
+            <div className="mt-2">
               <p className="text-sm font-normal text-center text-gray-700 dark:text-gray-400 sm:text-start">
                 Don&apos;t have an account? {""}
                 <Link
