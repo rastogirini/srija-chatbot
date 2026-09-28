@@ -44,6 +44,11 @@ const Chat = () => {
   const [activeDiet, setActiveDiet] = useState('all');
   const [activeProtein, setActiveProtein] = useState('all');
   const [activeMakeupCategory, setActiveMakeupCategory] = useState('all');
+  // Shopkeeper-uploaded products (via the admin "Add Product" form) - merged
+  // into the hardcoded catalogs below so a newly added item actually shows
+  // up on this page, not just in the database.
+  const [dbFoodItems, setDbFoodItems] = useState([]);
+  const [dbBeautyItems, setDbBeautyItems] = useState([]);
   const [viewingProduct, setViewingProduct] = useState(null);
   const [chatOpen, setChatOpen] = useState(false);
   // Persisted to localStorage below so a page refresh doesn't silently wipe
@@ -82,6 +87,17 @@ const Chat = () => {
       // won't survive a refresh this time, same as before this change.
     }
   }, [cart]);
+
+  useEffect(() => {
+    fetch('http://localhost:5000/api/products')
+      .then(res => res.json())
+      .then(data => {
+        if (!data.success) return;
+        setDbFoodItems(data.products.filter(p => p.category === 'food'));
+        setDbBeautyItems(data.products.filter(p => p.category === 'beauty'));
+      })
+      .catch(err => console.error('Could not load uploaded products:', err));
+  }, []);
 
   // Shared cart - items added from the chatbot's "Add to cart" or the main
   // site's product cards both land here, matched by kind+name.
@@ -136,6 +152,13 @@ const Chat = () => {
       if (data.success) {
         setOrderConfirmation({ id: data.order.id, total: data.order.total });
         setCart([]);
+      } else if (data.unavailable_items) {
+        // A shopkeeper deleted something that's sitting in this cart - block
+        // the order (same as an out-of-stock check at checkout on a real
+        // site) and remove just those items, instead of losing the whole
+        // cart or silently placing an order for a discontinued item.
+        setCart(prev => prev.filter(c => !data.unavailable_items.includes(c.name)));
+        setOrderConfirmation({ unavailable: data.unavailable_items });
       } else {
         setOrderConfirmation({ error: true });
       }
@@ -146,433 +169,35 @@ const Chat = () => {
     }
   };
 
-  // nutrition values are approximate, per 100g - illustrative, not lab-tested
-  const foodMenu = [
-    // ITALIAN
-    {
-      id: 1,
-      name: 'Grilled Salmon',
-      price: '₹650',
-      image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&h=300&fit=crop',
-      description: 'Fresh Atlantic salmon with lemon butter sauce',
-      category: 'MAIN COURSE',
-      cuisine: 'italian',
-      protein: 'high',
-      nutrition: { protein: 20, calories: 180, carbs: 1 },
-      diet: ['gluten-free', 'low-calorie']
-    },
-    {
-      id: 2,
-      name: 'Pasta Carbonara',
-      price: '₹550',
-      image: 'https://images.unsplash.com/photo-1621996346565-e3dbc646d9a9?w=400&h=300&fit=crop',
-      description: 'Creamy Italian pasta with pancetta and parmesan',
-      category: 'MAIN COURSE',
-      cuisine: 'italian',
-      protein: 'high',
-      nutrition: { protein: 10, calories: 250, carbs: 28 },
-      diet: []
-    },
-    {
-      id: 3,
-      name: 'Bruschetta',
-      price: '₹300',
-      image: 'https://images.unsplash.com/photo-1546793665-c74683f339c1?w=400&h=300&fit=crop',
-      description: 'Toasted bread with tomatoes, garlic and basil',
-      category: 'APPETIZER',
-      cuisine: 'italian',
-      protein: 'low',
-      nutrition: { protein: 6, calories: 150, carbs: 22 },
-      diet: ['vegan']
-    },
-    {
-      id: 4,
-      name: 'Tiramisu',
-      price: '₹250',
-      image: 'https://images.unsplash.com/photo-1571115177098-24ec42ed204d?w=400&h=300&fit=crop',
-      description: 'Classic Italian dessert with mascarpone',
-      category: 'DESSERT',
-      cuisine: 'italian',
-      protein: 'low',
-      nutrition: { protein: 5, calories: 280, carbs: 30 },
-      diet: ['vegetarian']
-    },
-    {
-      id: 5,
-      name: 'Ribeye Steak',
-      price: '₹750',
-      image: 'https://images.unsplash.com/photo-1600891964092-4316c288032e?w=400&h=300&fit=crop',
-      description: 'Prime cut aged 28 days with garlic butter',
-      category: 'MAIN COURSE',
-      cuisine: 'italian',
-      protein: 'high',
-      nutrition: { protein: 25, calories: 220, carbs: 0 },
-      diet: ['gluten-free', 'low-calorie']
-    },
-    {
-      id: 6,
-      name: 'Chocolate Cake',
-      price: '₹280',
-      image: 'https://images.unsplash.com/photo-1578985545062-69928b1d9587?w=400&h=300&fit=crop',
-      description: 'Rich dark chocolate cake with ganache',
-      category: 'DESSERT',
-      cuisine: 'italian',
-      protein: 'low',
-      nutrition: { protein: 5, calories: 370, carbs: 50 },
-      diet: ['vegetarian']
-    },
+  // The full menu - original dishes and anything a shopkeeper has since
+  // added via the admin "Add Product" form - now lives in the products
+  // table (the original dishes were migrated in once, so the admin
+  // Products/Best-Sellers page can see and track them like anything else).
+  // Nutrition/protein are only present for the originally-migrated dishes;
+  // admin-added items don't collect them yet, so those fields come back
+  // null and the UI already tolerates that (renderFoodCard skips a missing
+  // nutrition line, and the protein badge just doesn't render).
+  const foodMenu = dbFoodItems.map(p => ({
+    id: `db-${p.id}`,
+    name: p.name,
+    price: `₹${Math.round(Number(p.price))}`,
+    image: p.image ? (p.image.startsWith('http') ? p.image : `http://localhost:5000${p.image}`) : '',
+    description: p.description || '',
+    category: (p.course || 'main').toUpperCase(),
+    cuisine: p.cuisine || 'indian',
+    protein: p.protein || null,
+    nutrition: p.nutrition || null,
+    diet: p.diet ? p.diet.split(',').filter(Boolean) : [],
+  }));
 
-    // INDIAN
-    {
-      id: 7,
-      name: 'Butter Chicken',
-      price: '₹550',
-      image: 'https://images.unsplash.com/photo-1742599361498-79824d24e355?w=400&h=300&fit=crop',
-      description: 'Tender chicken in creamy tomato sauce with spices',
-      category: 'MAIN COURSE',
-      cuisine: 'indian',
-      protein: 'high',
-      nutrition: { protein: 16, calories: 230, carbs: 7 },
-      diet: ['gluten-free']
-    },
-    {
-      id: 8,
-      name: 'Paneer Tikka',
-      price: '₹400',
-      image: 'https://images.unsplash.com/photo-1755090154677-87e7aa5487ff?w=400&h=300&fit=crop',
-      description: 'Grilled cottage cheese with yogurt and spices',
-      category: 'APPETIZER',
-      cuisine: 'indian',
-      protein: 'high',
-      nutrition: { protein: 18, calories: 220, carbs: 6 },
-      diet: ['vegetarian', 'gluten-free', 'low-calorie']
-    },
-    {
-      id: 9,
-      name: 'Biryani',
-      price: '₹500',
-      image: 'https://images.unsplash.com/photo-1589302168068-964664d93dc0?w=400&h=300&fit=crop',
-      description: 'Fragrant rice with meat and aromatic spices',
-      category: 'MAIN COURSE',
-      cuisine: 'indian',
-      protein: 'low',
-      nutrition: { protein: 9, calories: 200, carbs: 28 },
-      diet: []
-    },
-    {
-      id: 10,
-      name: 'Samosa',
-      price: '₹75',
-      image: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=400&h=300&fit=crop',
-      description: 'Crispy pastry with spiced potato filling',
-      category: 'APPETIZER',
-      cuisine: 'indian',
-      protein: 'low',
-      nutrition: { protein: 4, calories: 260, carbs: 30 },
-      fried: true,
-      diet: ['vegan']
-    },
-    {
-      id: 11,
-      name: 'Chana Masala',
-      price: '₹380',
-      image: 'https://images.unsplash.com/photo-1716535232842-d10da4eb33d5?w=400&h=300&fit=crop',
-      description: 'Chickpeas in aromatic tomato curry',
-      category: 'MAIN COURSE',
-      cuisine: 'indian',
-      protein: 'low',
-      nutrition: { protein: 7, calories: 140, carbs: 18 },
-      diet: ['vegetarian', 'vegan', 'gluten-free', 'low-calorie']
-    },
-    {
-      id: 12,
-      name: 'Gulab Jamun',
-      price: '₹220',
-      image: 'https://images.unsplash.com/photo-1595608010652-d8bf1103a1c5?w=400&h=300&fit=crop',
-      description: 'Sweet dumplings in rose syrup',
-      category: 'DESSERT',
-      cuisine: 'indian',
-      protein: 'low',
-      nutrition: { protein: 4, calories: 320, carbs: 45 },
-      fried: true,
-      diet: ['vegetarian']
-    },
-
-    // CHINESE
-    {
-      id: 13,
-      name: 'General Tso Chicken',
-      price: '₹500',
-      image: 'https://images.unsplash.com/photo-1598103442097-8b74394b95c6?w=400&h=300&fit=crop',
-      description: 'Crispy chicken in spicy tangy sauce',
-      category: 'MAIN COURSE',
-      cuisine: 'chinese',
-      protein: 'high',
-      nutrition: { protein: 14, calories: 280, carbs: 20 },
-      fried: true,
-      diet: ['gluten-free', 'low-calorie']
-    },
-    {
-      id: 14,
-      name: 'Kung Pao Tofu',
-      price: '₹420',
-      image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&h=300&fit=crop',
-      description: 'Tofu with peanuts in savory sauce',
-      category: 'MAIN COURSE',
-      cuisine: 'chinese',
-      protein: 'high',
-      nutrition: { protein: 10, calories: 180, carbs: 10 },
-      diet: ['vegetarian', 'vegan', 'low-calorie']
-    },
-    {
-      id: 15,
-      name: 'Spring Rolls',
-      price: '₹280',
-      image: 'https://images.unsplash.com/photo-1695712641569-05eee7b37b6d?w=400&h=300&fit=crop',
-      description: 'Crispy rolls with vegetables and meat',
-      category: 'APPETIZER',
-      cuisine: 'chinese',
-      protein: 'low',
-      nutrition: { protein: 5, calories: 230, carbs: 25 },
-      fried: true,
-      diet: []
-    },
-    {
-      id: 16,
-      name: 'Vegetable Fried Rice',
-      price: '₹350',
-      image: 'https://images.unsplash.com/photo-1751618646882-4221d5e3b1c2?w=400&h=300&fit=crop',
-      description: 'Rice stir-fried with fresh vegetables',
-      category: 'MAIN COURSE',
-      cuisine: 'chinese',
-      protein: 'low',
-      nutrition: { protein: 4, calories: 170, carbs: 28 },
-      fried: true,
-      diet: ['vegetarian', 'vegan', 'gluten-free']
-    },
-    {
-      id: 17,
-      name: 'Mapo Tofu',
-      price: '₹400',
-      image: 'https://images.unsplash.com/photo-1582878826629-29b7ad1cdc43?w=400&h=300&fit=crop',
-      description: 'Soft tofu in spicy sauce with minced meat',
-      category: 'MAIN COURSE',
-      cuisine: 'chinese',
-      protein: 'low',
-      nutrition: { protein: 9, calories: 150, carbs: 6 },
-      diet: ['gluten-free']
-    },
-    {
-      id: 18,
-      name: 'Mango Pudding',
-      price: '₹240',
-      image: 'https://images.unsplash.com/photo-1617075355766-3b6c68938165?w=400&h=300&fit=crop',
-      description: 'Smooth mango dessert with coconut milk',
-      category: 'DESSERT',
-      cuisine: 'chinese',
-      protein: 'low',
-      nutrition: { protein: 3, calories: 150, carbs: 28 },
-      diet: ['vegetarian', 'low-calorie']
-    },
-
-    // INDIAN VEGETARIAN — HIGH/LOW PROTEIN & CALORIE PICKS
-    {
-      id: 19,
-      name: 'Paneer Butter Masala',
-      price: '₹480',
-      image: 'https://images.unsplash.com/photo-1567529854338-fc097b962123?w=400&h=300&fit=crop',
-      description: 'Paneer cubes in a rich, creamy tomato gravy',
-      category: 'MAIN COURSE',
-      cuisine: 'indian',
-      protein: 'high',
-      nutrition: { protein: 15, calories: 250, carbs: 9 },
-      diet: ['vegetarian', 'gluten-free', 'high-calorie']
-    },
-    {
-      id: 20,
-      name: 'Rajma Chawal',
-      price: '₹420',
-      image: 'https://images.unsplash.com/photo-1668236534990-73c4ed23043c?w=400&h=300&fit=crop',
-      description: 'Kidney bean curry served over steamed rice',
-      category: 'MAIN COURSE',
-      cuisine: 'indian',
-      protein: 'high',
-      nutrition: { protein: 11, calories: 210, carbs: 24 },
-      diet: ['vegetarian', 'gluten-free', 'high-calorie']
-    },
-    {
-      id: 21,
-      name: 'Masoor Dal',
-      price: '₹280',
-      image: 'https://plus.unsplash.com/premium_photo-1699293238624-819cfcfa1de3?w=400&h=300&fit=crop',
-      description: 'Red lentils simmered with mild aromatic spices',
-      category: 'MAIN COURSE',
-      cuisine: 'indian',
-      protein: 'high',
-      nutrition: { protein: 10, calories: 110, carbs: 16 },
-      diet: ['vegetarian', 'vegan', 'gluten-free', 'low-calorie']
-    },
-    {
-      id: 22,
-      name: 'Moong Sprouts Chaat',
-      price: '₹180',
-      image: 'https://images.unsplash.com/photo-1622732777601-e744c3401d44?w=400&h=300&fit=crop',
-      description: 'Sprouted moong beans tossed with lemon and spices',
-      category: 'APPETIZER',
-      cuisine: 'indian',
-      protein: 'high',
-      nutrition: { protein: 10, calories: 90, carbs: 12 },
-      diet: ['vegetarian', 'vegan', 'gluten-free', 'low-calorie']
-    },
-    {
-      id: 23,
-      name: 'Aloo Paratha',
-      price: '₹220',
-      image: 'https://images.unsplash.com/photo-1708782343717-be4ea260249a?w=400&h=300&fit=crop',
-      description: 'Whole wheat flatbread stuffed with spiced potato',
-      category: 'MAIN COURSE',
-      cuisine: 'indian',
-      protein: 'low',
-      nutrition: { protein: 5, calories: 270, carbs: 35 },
-      fried: true,
-      diet: ['vegetarian', 'high-calorie']
-    },
-    {
-      id: 24,
-      name: 'Aloo Tikki',
-      price: '₹200',
-      image: 'https://images.unsplash.com/photo-1755090155112-16fe70d49ca3?w=400&h=300&fit=crop',
-      description: 'Crispy pan-fried potato patties with green chutney',
-      category: 'APPETIZER',
-      cuisine: 'indian',
-      protein: 'low',
-      nutrition: { protein: 4, calories: 220, carbs: 28 },
-      fried: true,
-      diet: ['vegetarian', 'gluten-free', 'high-calorie']
-    },
-    {
-      id: 25,
-      name: 'Jeera Rice',
-      price: '₹180',
-      image: 'https://indianspice.ca/wp-content/uploads/2022/12/Indian_Spice_Jeera_Rice.jpg',
-      description: 'Basmati rice tempered with roasted cumin seeds',
-      category: 'MAIN COURSE',
-      cuisine: 'indian',
-      protein: 'low',
-      nutrition: { protein: 3, calories: 150, carbs: 30 },
-      diet: ['vegetarian', 'vegan', 'gluten-free', 'low-calorie']
-    },
-    {
-      id: 26,
-      name: 'Tandoori Roti',
-      price: '₹40',
-      image: 'https://images.unsplash.com/photo-1780907084884-ded9fddbb474?w=400&h=300&fit=crop',
-      description: 'Whole wheat flatbread roasted fresh on the tandoor',
-      category: 'APPETIZER',
-      cuisine: 'indian',
-      protein: 'low',
-      nutrition: { protein: 6, calories: 120, carbs: 24 },
-      diet: ['vegetarian', 'vegan', 'low-calorie']
-    },
-    {
-      id: 27,
-      name: 'Butter Naan',
-      price: '₹70',
-      image: 'https://images.unsplash.com/photo-1756821752957-00bfcadc3748?w=400&h=300&fit=crop',
-      description: 'Soft leavened flatbread brushed with butter',
-      category: 'APPETIZER',
-      cuisine: 'indian',
-      protein: 'low',
-      nutrition: { protein: 7, calories: 260, carbs: 40 },
-      diet: ['vegetarian', 'high-calorie']
-    },
-    {
-      id: 28,
-      name: 'Garden Salad',
-      price: '₹150',
-      image: 'https://images.unsplash.com/photo-1757596057470-19d36962705d?w=400&h=300&fit=crop',
-      description: 'Crisp shredded cabbage and carrot tossed with herbs',
-      category: 'APPETIZER',
-      cuisine: 'indian',
-      protein: 'low',
-      nutrition: { protein: 2, calories: 60, carbs: 10 },
-      diet: ['vegetarian', 'vegan', 'gluten-free', 'low-calorie']
-    }
-  ];
-
-  const makeupItems = [
-    // LIPSTICK
-    {
-      id: 101,
-      name: 'Velvet Matte Lipstick',
-      price: '₹899',
-      image: 'https://images.unsplash.com/photo-1586495777744-4413f21062fa?w=400&h=300&fit=crop',
-      description: 'Long-lasting matte finish in classic red',
-      category: 'LIPSTICK'
-    },
-    {
-      id: 102,
-      name: 'Glossy Tint Lip Balm',
-      price: '₹499',
-      image: 'https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?w=400&h=300&fit=crop',
-      description: 'Sheer, hydrating tint with a glossy finish',
-      category: 'LIPSTICK'
-    },
-
-    // FOUNDATION
-    {
-      id: 103,
-      name: 'Silk Finish Foundation',
-      price: '₹1299',
-      image: 'https://images.unsplash.com/photo-1571875257727-256c39da42af?w=400&h=300&fit=crop',
-      description: 'Lightweight, buildable coverage for all-day wear',
-      category: 'FOUNDATION'
-    },
-    {
-      id: 104,
-      name: 'BB Cream SPF 30',
-      price: '₹799',
-      image: 'https://images.unsplash.com/photo-1571781926291-c477ebfd024b?w=400&h=300&fit=crop',
-      description: 'Sheer coverage with sun protection',
-      category: 'FOUNDATION'
-    },
-
-    // SKINCARE
-    {
-      id: 105,
-      name: 'Hydrating Serum',
-      price: '₹1499',
-      image: 'https://images.unsplash.com/photo-1620916566398-39f1143ab7be?w=400&h=300&fit=crop',
-      description: 'Hyaluronic acid serum for deep hydration',
-      category: 'SKINCARE'
-    },
-    {
-      id: 106,
-      name: 'Vitamin C Face Cream',
-      price: '₹1099',
-      image: 'https://images.unsplash.com/photo-1556228720-195a672e8a03?w=400&h=300&fit=crop',
-      description: 'Brightening daily moisturizer',
-      category: 'SKINCARE'
-    },
-
-    // FRAGRANCE
-    {
-      id: 107,
-      name: 'Floral Eau de Parfum',
-      price: '₹2499',
-      image: 'https://images.unsplash.com/photo-1541643600914-78b084683601?w=400&h=300&fit=crop',
-      description: 'A delicate floral scent with hints of jasmine',
-      category: 'FRAGRANCE'
-    },
-    {
-      id: 108,
-      name: 'Citrus Body Mist',
-      price: '₹699',
-      image: 'https://images.unsplash.com/photo-1592945403244-b3fbafd7f539?w=400&h=300&fit=crop',
-      description: 'Light, refreshing citrus fragrance',
-      category: 'FRAGRANCE'
-    }
-  ];
+  const makeupItems = dbBeautyItems.map(p => ({
+    id: `db-${p.id}`,
+    name: p.name,
+    price: `₹${Math.round(Number(p.price))}`,
+    image: p.image ? (p.image.startsWith('http') ? p.image : `http://localhost:5000${p.image}`) : '',
+    description: p.description || '',
+    category: (p.subcategory || 'skincare').toUpperCase(),
+  }));
 
   const cuisines = [
     { id: 'all', label: 'All Cuisines', icon: '🍽️' },

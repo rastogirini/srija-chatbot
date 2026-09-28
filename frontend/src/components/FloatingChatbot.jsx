@@ -20,46 +20,45 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
   // step, keyed by `${messageIndex}-${itemName}` so multiple such prompts
   // in the same conversation don't clash.
   const [candidateQty, setCandidateQty] = useState({});
+  // Shopkeeper-uploaded food products from the database (via the admin "Add
+  // Product" form) - merged into the hardcoded menu below so a newly added
+  // dish is actually findable through suggestions, not just stored.
+  const [dbFoodItems, setDbFoodItems] = useState([]);
   const messagesEndRef = useRef(null);
+
+  useEffect(() => {
+    fetch('http://localhost:5000/api/products?category=food')
+      .then(res => res.json())
+      .then(data => { if (data.success) setDbFoodItems(data.products); })
+      .catch(err => console.error('Could not load uploaded food products:', err));
+  }, []);
 
   const cartCount = cart.reduce((sum, c) => sum + c.qty, 0);
 
-  // Food Menu Data
-  // nutrition values are approximate, per 100g - illustrative, not lab-tested
-  const foodMenu = [
-    { name: 'Bruschetta', price: 300, cuisine: 'italian', type: 'appetizer', protein: 'low', diet: ['vegan'], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1546793665-c74683f339c1?w=400&h=300&fit=crop', description: 'Toasted bread with tomatoes, garlic and basil', nutrition: { protein: 6, calories: 150, carbs: 22 } },
-    { name: 'Paneer Tikka', price: 400, cuisine: 'indian', type: 'appetizer', protein: 'high', diet: ['vegetarian', 'gluten-free'], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1755090154677-87e7aa5487ff?w=400&h=300&fit=crop', description: 'Grilled cottage cheese with yogurt and spices', nutrition: { protein: 18, calories: 220, carbs: 6 } },
-    { name: 'Samosa', price: 75, cuisine: 'indian', type: 'appetizer', protein: 'low', diet: ['vegan'], time: ['breakfast', 'lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=400&h=300&fit=crop', description: 'Crispy pastry with spiced potato filling', fried: true, nutrition: { protein: 4, calories: 260, carbs: 30 } },
-    { name: 'Spring Rolls', price: 280, cuisine: 'chinese', type: 'appetizer', protein: 'low', diet: [], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1695712641569-05eee7b37b6d?w=400&h=300&fit=crop', description: 'Crispy rolls with vegetables and meat', fried: true, nutrition: { protein: 5, calories: 230, carbs: 25 } },
-
-    { name: 'Grilled Salmon', price: 650, cuisine: 'italian', type: 'main', course: 'main', protein: 'high', diet: ['gluten-free', 'low-calorie'], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&h=300&fit=crop', description: 'Fresh Atlantic salmon with lemon butter sauce', nutrition: { protein: 20, calories: 180, carbs: 1 } },
-    { name: 'Pasta Carbonara', price: 550, cuisine: 'italian', type: 'main', course: 'main', protein: 'high', diet: [], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1621996346565-e3dbc646d9a9?w=400&h=300&fit=crop', description: 'Creamy Italian pasta with pancetta and parmesan', nutrition: { protein: 10, calories: 250, carbs: 28 } },
-    { name: 'Ribeye Steak', price: 750, cuisine: 'italian', type: 'main', course: 'main', protein: 'high', diet: ['gluten-free', 'low-calorie'], time: ['dinner'], image: 'https://images.unsplash.com/photo-1600891964092-4316c288032e?w=400&h=300&fit=crop', description: 'Prime cut aged 28 days with garlic butter', nutrition: { protein: 25, calories: 220, carbs: 0 } },
-    { name: 'Butter Chicken', price: 550, cuisine: 'indian', type: 'main', course: 'main', curry: true, protein: 'high', diet: ['gluten-free'], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1742599361498-79824d24e355?w=400&h=300&fit=crop', description: 'Tender chicken in creamy tomato sauce with spices', nutrition: { protein: 16, calories: 230, carbs: 7 } },
-    { name: 'Biryani', price: 500, cuisine: 'indian', type: 'main', course: 'main', protein: 'low', diet: [], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1589302168068-964664d93dc0?w=400&h=300&fit=crop', description: 'Fragrant rice with meat and aromatic spices', nutrition: { protein: 9, calories: 200, carbs: 28 } },
-    { name: 'Chana Masala', price: 380, cuisine: 'indian', type: 'main', course: 'main', curry: true, protein: 'low', diet: ['vegetarian', 'vegan', 'gluten-free', 'low-calorie'], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1716535232842-d10da4eb33d5?w=400&h=300&fit=crop', description: 'Chickpeas in aromatic tomato curry', nutrition: { protein: 7, calories: 140, carbs: 18 } },
-    { name: 'General Tso Chicken', price: 500, cuisine: 'chinese', type: 'main', course: 'main', protein: 'high', diet: ['gluten-free', 'low-calorie'], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1598103442097-8b74394b95c6?w=400&h=300&fit=crop', description: 'Crispy chicken in spicy tangy sauce', fried: true, nutrition: { protein: 14, calories: 280, carbs: 20 } },
-    { name: 'Kung Pao Tofu', price: 420, cuisine: 'chinese', type: 'main', course: 'main', protein: 'high', diet: ['vegetarian', 'vegan', 'low-calorie'], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&h=300&fit=crop', description: 'Tofu with peanuts in savory sauce', nutrition: { protein: 10, calories: 180, carbs: 10 } },
-    { name: 'Vegetable Fried Rice', price: 350, cuisine: 'chinese', type: 'main', protein: 'low', diet: ['vegetarian', 'vegan', 'gluten-free'], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1751618646882-4221d5e3b1c2?w=400&h=300&fit=crop', description: 'Rice stir-fried with fresh vegetables', fried: true, nutrition: { protein: 4, calories: 170, carbs: 28 } },
-    { name: 'Mapo Tofu', price: 400, cuisine: 'chinese', type: 'main', course: 'main', protein: 'low', diet: ['gluten-free'], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1582878826629-29b7ad1cdc43?w=400&h=300&fit=crop', description: 'Soft tofu in spicy sauce with minced meat', nutrition: { protein: 9, calories: 150, carbs: 6 } },
-
-    { name: 'Tiramisu', price: 250, cuisine: 'italian', type: 'dessert', course: 'dessert', protein: 'low', diet: ['vegetarian'], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1571115177098-24ec42ed204d?w=400&h=300&fit=crop', description: 'Classic Italian dessert with mascarpone', nutrition: { protein: 5, calories: 280, carbs: 30 } },
-    { name: 'Chocolate Cake', price: 280, cuisine: 'italian', type: 'dessert', course: 'dessert', protein: 'low', diet: ['vegetarian'], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1578985545062-69928b1d9587?w=400&h=300&fit=crop', description: 'Rich dark chocolate cake with ganache', nutrition: { protein: 5, calories: 370, carbs: 50 } },
-    { name: 'Gulab Jamun', price: 220, cuisine: 'indian', type: 'dessert', course: 'dessert', protein: 'low', diet: ['vegetarian'], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1595608010652-d8bf1103a1c5?w=400&h=300&fit=crop', description: 'Sweet dumplings in rose syrup', fried: true, nutrition: { protein: 4, calories: 320, carbs: 45 } },
-    { name: 'Mango Pudding', price: 240, cuisine: 'chinese', type: 'dessert', course: 'dessert', protein: 'low', diet: ['vegetarian', 'low-calorie'], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1617075355766-3b6c68938165?w=400&h=300&fit=crop', description: 'Smooth mango dessert with coconut milk', nutrition: { protein: 3, calories: 150, carbs: 28 } },
-
-    { name: 'Paneer Butter Masala', price: 480, cuisine: 'indian', type: 'main', course: 'main', curry: true, protein: 'high', diet: ['vegetarian', 'gluten-free', 'high-calorie'], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1567529854338-fc097b962123?w=400&h=300&fit=crop', description: 'Paneer cubes in a rich, creamy tomato gravy', nutrition: { protein: 15, calories: 250, carbs: 9 } },
-    { name: 'Rajma Chawal', price: 420, cuisine: 'indian', type: 'main', course: 'main', curry: true, protein: 'high', diet: ['vegetarian', 'gluten-free', 'high-calorie'], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1668236534990-73c4ed23043c?w=400&h=300&fit=crop', description: 'Kidney bean curry served over steamed rice', nutrition: { protein: 11, calories: 210, carbs: 24 } },
-    { name: 'Masoor Dal', price: 280, cuisine: 'indian', type: 'main', course: 'main', curry: true, protein: 'high', diet: ['vegetarian', 'vegan', 'gluten-free', 'low-calorie'], time: ['lunch', 'dinner'], image: 'https://plus.unsplash.com/premium_photo-1699293238624-819cfcfa1de3?w=400&h=300&fit=crop', description: 'Red lentils simmered with mild aromatic spices', nutrition: { protein: 10, calories: 110, carbs: 16 } },
-    { name: 'Moong Sprouts Chaat', price: 180, cuisine: 'indian', type: 'appetizer', course: 'salad', protein: 'high', diet: ['vegetarian', 'vegan', 'gluten-free', 'low-calorie'], time: ['breakfast', 'lunch'], image: 'https://images.unsplash.com/photo-1622732777601-e744c3401d44?w=400&h=300&fit=crop', description: 'Sprouted moong beans tossed with lemon and spices', nutrition: { protein: 10, calories: 90, carbs: 12 } },
-    { name: 'Aloo Paratha', price: 220, cuisine: 'indian', type: 'main', course: 'bread', protein: 'low', diet: ['vegetarian', 'high-calorie'], time: ['breakfast', 'lunch'], image: 'https://images.unsplash.com/photo-1708782343717-be4ea260249a?w=400&h=300&fit=crop', description: 'Whole wheat flatbread stuffed with spiced potato', fried: true, nutrition: { protein: 5, calories: 270, carbs: 35 } },
-    { name: 'Aloo Tikki', price: 200, cuisine: 'indian', type: 'appetizer', protein: 'low', diet: ['vegetarian', 'gluten-free', 'high-calorie'], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1755090155112-16fe70d49ca3?w=400&h=300&fit=crop', description: 'Crispy pan-fried potato patties with green chutney', fried: true, nutrition: { protein: 4, calories: 220, carbs: 28 } },
-    { name: 'Jeera Rice', price: 180, cuisine: 'indian', type: 'main', protein: 'low', diet: ['vegetarian', 'vegan', 'gluten-free', 'low-calorie'], time: ['lunch', 'dinner'], image: 'https://indianspice.ca/wp-content/uploads/2022/12/Indian_Spice_Jeera_Rice.jpg', description: 'Basmati rice tempered with roasted cumin seeds', nutrition: { protein: 3, calories: 150, carbs: 30 } },
-
-    { name: 'Tandoori Roti', price: 40, cuisine: 'indian', type: 'appetizer', course: 'bread', protein: 'low', diet: ['vegetarian', 'vegan', 'low-calorie'], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1780907084884-ded9fddbb474?w=400&h=300&fit=crop', description: 'Whole wheat flatbread roasted fresh on the tandoor', nutrition: { protein: 6, calories: 120, carbs: 24 } },
-    { name: 'Butter Naan', price: 70, cuisine: 'indian', type: 'appetizer', course: 'bread', protein: 'low', diet: ['vegetarian', 'high-calorie'], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1756821752957-00bfcadc3748?w=400&h=300&fit=crop', description: 'Soft leavened flatbread brushed with butter', nutrition: { protein: 7, calories: 260, carbs: 40 } },
-    { name: 'Garden Salad', price: 150, cuisine: 'indian', type: 'appetizer', course: 'salad', protein: 'low', diet: ['vegetarian', 'vegan', 'gluten-free', 'low-calorie'], time: ['lunch', 'dinner'], image: 'https://images.unsplash.com/photo-1757596057470-19d36962705d?w=400&h=300&fit=crop', description: 'Crisp shredded cabbage and carrot tossed with herbs', nutrition: { protein: 2, calories: 60, carbs: 10 } },
-  ];
+  // The full menu - original dishes and anything a shopkeeper has since
+  // added via the admin "Add Product" form - now lives in the products
+  // table (the original dishes were migrated in once, so the admin
+  // Products/Best-Sellers page can see and track them like anything else).
+  // Nutrition/protein/time/fried/curry are only real for the
+  // originally-migrated dishes; admin-added items don't collect them yet,
+  // so those come back null/default - renderFoodCard and the meal composer
+  // already tolerate that (missing nutrition line, medium-protein default,
+  // no curry-only bread pairing).
+  const foodMenu = dbFoodItems.map(p => ({
+    name: p.name,
+    price: Number(p.price),
+    cuisine: p.cuisine || 'indian',
+    type: p.course || 'main',
+    course: p.course || undefined,
+    protein: p.protein || 'medium',
+    diet: p.diet ? p.diet.split(',').filter(Boolean) : [],
+    time: p.meal_time ? p.meal_time.split(',').filter(Boolean) : ['lunch', 'dinner'],
+    fried: p.fried || false,
+    curry: p.curry || false,
+    image: p.image ? (p.image.startsWith('http') ? p.image : `http://localhost:5000${p.image}`) : '',
+    description: p.description || '',
+    nutrition: p.nutrition || null,
+  }));
 
   // A distinct icon per dish, rather than the same fork-and-knife everywhere
   const FOOD_ICONS = {
@@ -164,6 +163,17 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
     return () => clearInterval(interval);
   }, [loading]);
 
+  // Common words to ignore when matching a message against live product
+  // names by shared word ("show only ice-cream" shouldn't let "show" or
+  // "only" spuriously match some unrelated product that happens to share
+  // one of those words).
+  const SUGGESTION_STOPWORDS = new Set([
+    'the', 'a', 'an', 'to', 'of', 'for', 'and', 'or', 'is', 'it', 'me', 'my',
+    'we', 'want', 'order', 'show', 'only', 'some', 'any', 'get', 'give',
+    'please', 'with', 'have', 'has', 'are', 'you', 'your', 'can', 'could',
+    'like', 'need', 'would', 'today', 'now', 'options', 'option',
+  ]);
+
   // Ingredient/dish-name mentions ("paneer options", "any chicken dishes?")
   // that don't contain an explicit "suggest"/"budget"-style trigger word -
   // matching one of these routes the message to the instant, image-carrying
@@ -207,6 +217,36 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
       if (new RegExp(`\\b${kw}s?\\b`, 'i').test(message)) { dishKeyword = kw; break; }
     }
 
+    // FOOD_KEYWORDS above is a fixed, hand-maintained list - it has no idea
+    // about a shopkeeper-uploaded product (e.g. "ice-cream"), so a message
+    // naming one used to fall through to the ungrounded AI chat, which just
+    // invented an answer instead of showing the real product. Falls back to
+    // matching by shared *words*, not the whole name - "show me ice-cream"
+    // should find "Ice-cream sundae" too, since "ice-cream" genuinely is
+    // part of that name; requiring the full phrase was too strict and
+    // missed exactly this case.
+    let matchedProducts = [];
+    if (!dishKeyword) {
+      // Also add each token's simple singular form ("ice-creams" ->
+      // "ice-cream") so a plural mention still matches a singular product
+      // name - the raw token set alone requires an exact match, and a
+      // hyphenated word like "ice-cream" doesn't go through FOOD_KEYWORDS'
+      // own "s?" plural handling above since it isn't a fixed keyword.
+      const tokenize = (text) => {
+        const raw = (text.toLowerCase().match(/[a-z0-9-]+/g) || [])
+          .filter(t => t.length >= 3 && !SUGGESTION_STOPWORDS.has(t));
+        const expanded = new Set(raw);
+        raw.forEach(t => { if (t.length > 3 && t.endsWith('s')) expanded.add(t.slice(0, -1)); });
+        return [...expanded];
+      };
+      const messageTokens = new Set(tokenize(message));
+      if (messageTokens.size > 0) {
+        matchedProducts = foodMenu.filter(item =>
+          tokenize(item.name).some(t => messageTokens.has(t))
+        );
+      }
+    }
+
     // Check if user is asking for suggestions
     const isSuggestionRequest = lowerMsg.includes('suggest') ||
                                 lowerMsg.includes('recommendation') ||
@@ -223,7 +263,7 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
                                 lowerMsg.includes('carb') ||
                                 lowerMsg.includes('keto') ||
                                 /\b(meal|combo|thali)\b/i.test(message) ||
-                                dishKeyword !== null;
+                                dishKeyword !== null || matchedProducts.length > 0;
 
     if (!isSuggestionRequest) return null;
 
@@ -296,7 +336,20 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
     // salad + dessert - instead of just returning a flat list of matches.
     const wantsFullMeal = /\b(meal|combo|thali)\b/i.test(message);
 
-    return { budget, mealTime, diet, calorieLevel, cuisine, excludeFried, protein, lowCarb, wantsNonVeg, wantsFullMeal, dishKeyword };
+    // "suggest"/"recommend"/"give me" are food-domain words on their own,
+    // but they also show up in perfectly normal beauty requests ("suggest
+    // something for my dry skin") - if the message clearly points at
+    // skin/beauty and nothing food-specific was actually found, this isn't
+    // a food request. Without this, it fell through to suggestDishes()
+    // with every filter empty, which returned an arbitrary unfiltered dish
+    // instead of ever reaching the backend's (correct) beauty routing.
+    const mentionsBeautyDomain = /\b(skin|hair|shade|makeup|lipstick|foundation|skincare|perfume|fragrance)\b/i.test(message);
+    const hasFoodSignal = budget !== null || mealTime !== null || diet !== null || cuisine !== null ||
+      calorieLevel !== null || protein !== null || lowCarb || wantsNonVeg || wantsFullMeal || excludeFried ||
+      dishKeyword !== null || matchedProducts.length > 0;
+    if (mentionsBeautyDomain && !hasFoodSignal) return null;
+
+    return { budget, mealTime, diet, calorieLevel, cuisine, excludeFried, protein, lowCarb, wantsNonVeg, wantsFullMeal, dishKeyword, matchedProducts };
   };
 
   // A short, natural acknowledgment of what was asked, sent as its own chat
@@ -305,6 +358,12 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
   // suggest") instead of jumping straight from the user's message to a card
   // dump with no reply in between.
   const buildConversationalReply = (criteria, { isMeal = false } = {}) => {
+    if (criteria.matchedProducts?.length === 1) {
+      return `Here's what I found for "${criteria.matchedProducts[0].name}":`;
+    }
+    if (criteria.matchedProducts?.length > 1) {
+      return `Here's what I found:`;
+    }
     if (criteria.dishKeyword) {
       return `Sure! Here are some ${criteria.dishKeyword} options for you:`;
     }
@@ -365,8 +424,11 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
     // Filter by a mentioned ingredient/dish name ("paneer options", "any
     // chicken dishes?") first - it's the most specific signal, and applying
     // it before the softer preference filters below keeps results relevant
-    // even if a criteria matcher weren't set.
-    if (criteria.dishKeyword) {
+    // even if a criteria matcher weren't set. A live-product word match
+    // (matchedProducts) is even more specific than a fixed keyword.
+    if (criteria.matchedProducts?.length > 0) {
+      suggestions = criteria.matchedProducts;
+    } else if (criteria.dishKeyword) {
       suggestions = suggestions.filter(FOOD_KEYWORDS[criteria.dishKeyword]);
     }
 
@@ -735,6 +797,19 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
       return new RegExp(`\\b${escaped}\\b`).test(messageLower);
     });
 
+    // Shade/skin-type quiz trigger - checked before anything food-related
+    // since it's unambiguous and unrelated to meal/dish parsing. Starts a
+    // 2-question interactive flow entirely in the widget; the backend is
+    // only called once, at the end, with both answers.
+    const wantsMakeupQuiz = /\b(find my (shade|match)|skin quiz|help me (choose|pick)|not sure what (suits|works for) me|recommend.*for my skin)\b/i.test(userMessage);
+    if (wantsMakeupQuiz) {
+      setMessages(prev => [...prev,
+        { role: 'bot', content: "Let's find your match! Two quick questions:" },
+        { role: 'bot', content: 'makeup_quiz', step: 'skin_type' },
+      ]);
+      return;
+    }
+
     // Check if it's a food suggestion request
     const suggestionCriteria = parseFoodSuggestion(userMessage);
 
@@ -877,14 +952,16 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
     // cold suggestion request - offer the matching dishes and ask which one
     // to add and which current item it should replace, instead of just
     // dumping an unrelated card list.
-    if (suggestionCriteria?.dishKeyword && !suggestionCriteria.wantsFullMeal && lastMeal && lastMeal.length > 0) {
-      const candidates = foodMenu.filter(FOOD_KEYWORDS[suggestionCriteria.dishKeyword]).slice(0, 4);
+    if ((suggestionCriteria?.dishKeyword || suggestionCriteria?.matchedProducts?.length > 0) && !suggestionCriteria.wantsFullMeal && lastMeal && lastMeal.length > 0) {
+      const candidates = suggestionCriteria.matchedProducts?.length > 0
+        ? suggestionCriteria.matchedProducts.slice(0, 4)
+        : foodMenu.filter(FOOD_KEYWORDS[suggestionCriteria.dishKeyword]).slice(0, 4);
       if (candidates.length > 0) {
         setMessages(prev => [...prev, {
           role: 'bot',
           content: 'meal_addition_prompt',
           candidates,
-          keyword: suggestionCriteria.dishKeyword
+          keyword: suggestionCriteria.matchedProducts?.[0]?.name || suggestionCriteria.dishKeyword
         }]);
         return;
       }
@@ -939,7 +1016,7 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
       // actual conversation instead of answering each message cold. Skips
       // structured messages (suggestion cards) since they aren't text.
       const history = messages
-        .filter(m => typeof m.content === 'string' && m.content !== 'suggestions' && m.content !== 'makeup_suggestions' && m.content !== 'meal_suggestions')
+        .filter(m => typeof m.content === 'string' && m.content !== 'suggestions' && m.content !== 'makeup_suggestions' && m.content !== 'meal_suggestions' && m.content !== 'reservation_preferences' && m.content !== 'makeup_quiz' && m.content !== 'makeup_quiz_results')
         .slice(-10)
         .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content }));
 
@@ -974,6 +1051,12 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
         }
         if (data.makeup_products && data.makeup_products.length > 0) {
           newMessages.push({ role: 'bot', content: 'makeup_suggestions', products: data.makeup_products });
+        }
+        // All required reservation details are in but nothing's saved yet -
+        // ask the two preference questions, then finalize. `pending` holds
+        // the collected details to carry through both steps.
+        if (data.reservation_pending) {
+          newMessages.push({ role: 'bot', content: 'reservation_preferences', step: 'seating', pending: data.reservation_pending });
         }
         setMessages(prev => [...prev, ...newMessages]);
       }
@@ -1023,6 +1106,86 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
         ? `Done! Swapped in ${qtyLabel}${candidate.name} for ${oldItem.name} 🎉`
         : `Added ${qtyLabel}${candidate.name} to your meal! 🎉`
     }]);
+  };
+
+  // Pre-confirmation, step 1 of 2: seating preference. The booking is NOT
+  // saved yet - `pending` carries the collected details forward, and this
+  // choice just rides along to the dietary step.
+  const handleSeatingChoice = (pending, choice) => {
+    const labels = { window: '🪟 Window seat', quiet: '🤫 Somewhere quiet', none: 'No preference' };
+    const seating = choice === 'none' ? null : (choice === 'window' ? 'Window' : 'Quiet');
+    setMessages(prev => [...prev,
+      { role: 'user', content: labels[choice] },
+      { role: 'bot', content: 'reservation_preferences', step: 'dietary', pending: { ...pending, seating } },
+    ]);
+  };
+
+  // Step 2 of 2: veg/non-veg preference. This is where the reservation is
+  // finally written - POST /api/reservations with every collected field -
+  // and the confirmation message is whatever the server sends back.
+  const handleDietaryChoice = async (pending, choice) => {
+    const labels = { veg: '🥦 Vegetarian', nonveg: '🍗 Non-vegetarian', none: 'No preference' };
+    const dietary = choice === 'none' ? null : (choice === 'veg' ? 'Vegetarian' : 'Non-vegetarian');
+    setMessages(prev => [...prev, { role: 'user', content: labels[choice] }]);
+    setLoading(true);
+    try {
+      const res = await fetch('http://localhost:5000/api/reservations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...pending, dietary }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setMessages(prev => [...prev, { role: 'bot', content: data.text }]);
+      } else {
+        setMessages(prev => [...prev, { role: 'bot', content: data.error || 'Sorry, I could not confirm that booking. Please try again.' }]);
+      }
+    } catch (error) {
+      console.error('Error confirming reservation:', error);
+      setMessages(prev => [...prev, { role: 'bot', content: 'Connection error while confirming your booking. Please try again.' }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Shade/skin-type quiz, step 1 of 2: skin type. Nothing is fetched yet -
+  // the answer just rides forward to the second question.
+  const handleSkinTypeChoice = (skinType) => {
+    const labels = { dry: '🌵 Dry, needs hydration', oily: '☀️ Oily or combination' };
+    setMessages(prev => [...prev,
+      { role: 'user', content: labels[skinType] },
+      { role: 'bot', content: 'makeup_quiz', step: 'look', skinType },
+    ]);
+  };
+
+  // Step 2 of 2: the look they're going for. This is where the backend is
+  // finally called - once, with both answers - to turn them into real
+  // catalog picks with a reason each.
+  const handleLookChoice = async (skinType, look) => {
+    const labels = { bold: '💋 Bold & long-lasting', natural: '🌷 Natural & glowy' };
+    setMessages(prev => [...prev, { role: 'user', content: labels[look] }]);
+    setLoading(true);
+    try {
+      const res = await fetch('http://localhost:5000/api/makeup/quiz', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skin_type: skinType, look }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setMessages(prev => [...prev,
+          { role: 'bot', content: "Here's what I'd suggest for you:" },
+          { role: 'bot', content: 'makeup_quiz_results', picks: data.picks },
+        ]);
+      } else {
+        setMessages(prev => [...prev, { role: 'bot', content: data.error || 'Sorry, I could not put that together. Please try again.' }]);
+      }
+    } catch (error) {
+      console.error('Error fetching quiz results:', error);
+      setMessages(prev => [...prev, { role: 'bot', content: 'Connection error while finding your match. Please try again.' }]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleKeyPress = (e) => {
@@ -1129,7 +1292,8 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
                 )}
 
                 {msg.role === 'bot' && msg.content !== 'suggestions' && msg.content !== 'makeup_suggestions' && msg.content !== 'meal_suggestions' &&
-                  msg.content !== 'meal_addition_prompt' && msg.content !== 'meal_replace_prompt' && (
+                  msg.content !== 'meal_addition_prompt' && msg.content !== 'meal_replace_prompt' && msg.content !== 'reservation_preferences' &&
+                  msg.content !== 'makeup_quiz' && msg.content !== 'makeup_quiz_results' && (
                   <div className="message bot">
                     <div className="message-content">
                       {msg.content}
@@ -1338,6 +1502,141 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
                       💄 Suggested Products:
                     </h4>
                     {msg.products.map((product, idx) => renderMakeupCard(product, idx, product.price))}
+                  </div>
+                )}
+
+                {/* Pre-confirmation preference steps: seating, then dietary.
+                    The booking isn't saved until both are answered. */}
+                {msg.role === 'bot' && msg.content === 'reservation_preferences' && msg.step === 'seating' && (
+                  <div style={{ margin: '10px 0', padding: '12px', background: '#f0f4ff', borderRadius: '8px' }}>
+                    <div style={{ fontSize: '13px', color: '#333', marginBottom: '10px', lineHeight: '1.4' }}>
+                      Any seating preference?
+                    </div>
+                    {[
+                      { key: 'window', label: '🪟 Window seat' },
+                      { key: 'quiet', label: '🤫 Somewhere quiet' },
+                    ].map(({ key, label }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => handleSeatingChoice(msg.pending, key)}
+                        style={{
+                          display: 'flex', alignItems: 'center', width: '100%',
+                          padding: '10px 12px', marginBottom: '6px', background: 'white', border: '1.5px solid #667eea55',
+                          borderRadius: '8px', cursor: 'pointer', textAlign: 'left', fontSize: '13px', fontWeight: '600', color: '#333',
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => handleSeatingChoice(msg.pending, 'none')}
+                      style={{
+                        display: 'flex', alignItems: 'center', width: '100%',
+                        padding: '10px 12px', background: 'white', border: '1.5px solid #ccc',
+                        borderRadius: '8px', cursor: 'pointer', textAlign: 'left', fontSize: '13px', fontWeight: '600', color: '#888',
+                      }}
+                    >
+                      No preference
+                    </button>
+                  </div>
+                )}
+
+                {msg.role === 'bot' && msg.content === 'reservation_preferences' && msg.step === 'dietary' && (
+                  <div style={{ margin: '10px 0', padding: '12px', background: '#f0f4ff', borderRadius: '8px' }}>
+                    <div style={{ fontSize: '13px', color: '#333', marginBottom: '10px', lineHeight: '1.4' }}>
+                      One more thing - vegetarian or non-vegetarian?
+                    </div>
+                    {[
+                      { key: 'veg', label: '🥦 Vegetarian' },
+                      { key: 'nonveg', label: '🍗 Non-vegetarian' },
+                    ].map(({ key, label }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => handleDietaryChoice(msg.pending, key)}
+                        style={{
+                          display: 'flex', alignItems: 'center', width: '100%',
+                          padding: '10px 12px', marginBottom: '6px', background: 'white', border: '1.5px solid #667eea55',
+                          borderRadius: '8px', cursor: 'pointer', textAlign: 'left', fontSize: '13px', fontWeight: '600', color: '#333',
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => handleDietaryChoice(msg.pending, 'none')}
+                      style={{
+                        display: 'flex', alignItems: 'center', width: '100%',
+                        padding: '10px 12px', background: 'white', border: '1.5px solid #ccc',
+                        borderRadius: '8px', cursor: 'pointer', textAlign: 'left', fontSize: '13px', fontWeight: '600', color: '#888',
+                      }}
+                    >
+                      No preference
+                    </button>
+                  </div>
+                )}
+
+                {/* Shade/skin-type quiz, step 1: skin type */}
+                {msg.role === 'bot' && msg.content === 'makeup_quiz' && msg.step === 'skin_type' && (
+                  <div style={{ margin: '10px 0', padding: '12px', background: '#fdf1f7', borderRadius: '8px' }}>
+                    <div style={{ fontSize: '13px', color: '#333', marginBottom: '10px', lineHeight: '1.4' }}>
+                      How would you describe your skin?
+                    </div>
+                    {[
+                      { key: 'dry', label: '🌵 Dry, needs hydration' },
+                      { key: 'oily', label: '☀️ Oily or combination' },
+                    ].map(({ key, label }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => handleSkinTypeChoice(key)}
+                        style={{
+                          display: 'flex', alignItems: 'center', width: '100%',
+                          padding: '10px 12px', marginBottom: '6px', background: 'white', border: '1.5px solid #d6336c55',
+                          borderRadius: '8px', cursor: 'pointer', textAlign: 'left', fontSize: '13px', fontWeight: '600', color: '#333',
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Step 2: the look they're going for */}
+                {msg.role === 'bot' && msg.content === 'makeup_quiz' && msg.step === 'look' && (
+                  <div style={{ margin: '10px 0', padding: '12px', background: '#fdf1f7', borderRadius: '8px' }}>
+                    <div style={{ fontSize: '13px', color: '#333', marginBottom: '10px', lineHeight: '1.4' }}>
+                      What look are you going for?
+                    </div>
+                    {[
+                      { key: 'bold', label: '💋 Bold & long-lasting' },
+                      { key: 'natural', label: '🌷 Natural & glowy' },
+                    ].map(({ key, label }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => handleLookChoice(msg.skinType, key)}
+                        style={{
+                          display: 'flex', alignItems: 'center', width: '100%',
+                          padding: '10px 12px', marginBottom: '6px', background: 'white', border: '1.5px solid #d6336c55',
+                          borderRadius: '8px', cursor: 'pointer', textAlign: 'left', fontSize: '13px', fontWeight: '600', color: '#333',
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Quiz results - reuses the makeup product card, with each
+                    item's `reason` shown in place of its catalog description
+                    so the pick reads as personalized, not generic. */}
+                {msg.role === 'bot' && msg.content === 'makeup_quiz_results' && (
+                  <div style={{ margin: '10px 0', padding: '12px', background: '#fdf1f7', borderRadius: '8px' }}>
+                    {msg.picks.map((item, idx) => renderMakeupCard({ ...item, description: item.reason }, idx, item.price))}
                   </div>
                 )}
               </div>

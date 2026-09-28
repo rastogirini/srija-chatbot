@@ -78,6 +78,34 @@ def get_order_history(customer_name, limit=5):
         conn.close()
 
 
+def get_orders_by_customer_id(customer_id):
+    """Full order history for one customer (admin detail view) - matched by
+    customer_id rather than name, since names aren't guaranteed unique."""
+    if not customer_id:
+        return []
+
+    conn = get_db_connection()
+    if not conn:
+        return []
+
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT id, items, total, status, created_at
+            FROM orders
+            WHERE customer_id = %s
+            ORDER BY created_at DESC
+        """, (customer_id,))
+        history = cur.fetchall()
+        cur.close()
+        return history
+    except Exception as e:
+        print(f"❌ Error getting orders by customer id: {e}")
+        return []
+    finally:
+        conn.close()
+
+
 def list_orders():
     """Get all orders (for admin)."""
     conn = get_db_connection()
@@ -93,5 +121,102 @@ def list_orders():
     except Exception as e:
         print(f"❌ Error listing orders: {e}")
         return None
+    finally:
+        conn.close()
+
+
+ORDER_STATUSES = ['placed', 'preparing', 'ready', 'delivered', 'cancelled']
+
+
+def update_order_status(order_id, status):
+    """Move an order along its fulfillment lifecycle (or cancel it) - the
+    `status` column has existed since the orders table was created but
+    nothing ever wrote to it until now, so every order just sat at its
+    default 'placed' value forever."""
+    if status not in ORDER_STATUSES:
+        return False
+
+    conn = get_db_connection()
+    if not conn:
+        return False
+
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE orders SET status = %s WHERE id = %s", (status, order_id))
+        updated = cur.rowcount > 0
+        conn.commit()
+        cur.close()
+        return updated
+    except Exception as e:
+        print(f"❌ Error updating order status: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_revenue_summary(weeks=8, months=6):
+    """Revenue (not profit - there's no cost-of-goods data anywhere in this
+    schema, only what each order sold for) grouped by week and by month, for
+    the admin dashboard's chart. date_trunc buckets created_at into calendar
+    weeks/months; the WHERE clause caps how far back each series goes."""
+    conn = get_db_connection()
+    if not conn:
+        return None
+
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        cur.execute("""
+            SELECT date_trunc('week', created_at) AS bucket, SUM(total) AS total
+            FROM orders
+            WHERE created_at >= date_trunc('week', NOW()) - (%s || ' weeks')::interval
+            GROUP BY bucket
+            ORDER BY bucket
+        """, (weeks,))
+        weekly = cur.fetchall()
+
+        cur.execute("""
+            SELECT date_trunc('month', created_at) AS bucket, SUM(total) AS total
+            FROM orders
+            WHERE created_at >= date_trunc('month', NOW()) - (%s || ' months')::interval
+            GROUP BY bucket
+            ORDER BY bucket
+        """, (months,))
+        monthly = cur.fetchall()
+
+        cur.close()
+        return {"weekly": weekly, "monthly": monthly}
+    except Exception as e:
+        print(f"❌ Error getting revenue summary: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def get_top_spender_ids(limit=3):
+    """The `limit` customers who have spent the most across all their
+    orders - used to mark "star" customers on the admin dashboard. Only
+    customers with at least one order can appear (INNER JOIN via GROUP BY),
+    which is correct - someone with zero orders hasn't spent anything."""
+    conn = get_db_connection()
+    if not conn:
+        return []
+
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT customer_id
+            FROM orders
+            WHERE customer_id IS NOT NULL
+            GROUP BY customer_id
+            ORDER BY SUM(total) DESC
+            LIMIT %s
+        """, (limit,))
+        ids = [row[0] for row in cur.fetchall()]
+        cur.close()
+        return ids
+    except Exception as e:
+        print(f"❌ Error getting top spenders: {e}")
+        return []
     finally:
         conn.close()

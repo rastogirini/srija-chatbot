@@ -12,6 +12,7 @@ export default function SignInForm() {
   const [showPassword, setShowPassword] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -29,12 +30,20 @@ export default function SignInForm() {
       const response = await fetch("http://localhost:5000/api/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), email: email.trim() }),
+        body: JSON.stringify({ name: name.trim(), email: email.trim(), password }),
       });
       const data = await response.json();
 
       if (data.success) {
-        navigate("/select-persona", { state: { name: data.customer.name, email: data.customer.email, interests: data.customer.interests } });
+        if (data.customer.role === "admin") {
+          // The admin account routes to the dashboard instead of the
+          // persona flow - the password itself doubles as this tab's
+          // admin credential, re-sent as X-Admin-Password on data requests.
+          sessionStorage.setItem("admin_password", password);
+          navigate("/admin");
+        } else {
+          navigate("/select-persona", { state: { name: data.customer.name, email: data.customer.email, interests: data.customer.interests } });
+        }
       } else {
         setError(data.error || "Sign in failed. Please try again.");
       }
@@ -161,6 +170,8 @@ export default function SignInForm() {
                     <Input
                       type={showPassword ? "text" : "password"}
                       placeholder="Enter your password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
                     />
                     <span
                       onClick={() => setShowPassword(!showPassword)}

@@ -37,15 +37,21 @@ def init_database():
                 favorite_time VARCHAR(20),
                 favorite_dishes TEXT,
                 interests VARCHAR(200),
+                password VARCHAR(100),
+                role VARCHAR(20) DEFAULT 'customer',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(name, phone, email)
             )
         """)
 
-        # Existing databases from before `interests` existed won't get it from
-        # CREATE TABLE IF NOT EXISTS above - add it separately so upgrades work.
+        # Existing databases from before these columns existed won't get them
+        # from CREATE TABLE IF NOT EXISTS above - add them separately so
+        # upgrades work. `password` is only ever set for the admin account
+        # today - regular customers still log in by name+email alone.
         cur.execute("ALTER TABLE customers ADD COLUMN IF NOT EXISTS interests VARCHAR(200)")
+        cur.execute("ALTER TABLE customers ADD COLUMN IF NOT EXISTS password VARCHAR(100)")
+        cur.execute("ALTER TABLE customers ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'customer'")
 
         # Create reservations table
         # NOTE: schema intentionally matches the columns handle_reservation_request
@@ -69,6 +75,10 @@ def init_database():
                 customer_id VARCHAR(20)
             )
         """)
+        # Defaults to 'confirmed' (not 'placed' like orders) - a reservation
+        # row is only ever created once save_reservation() runs, by which
+        # point the booking is already fully confirmed, not pending.
+        cur.execute("ALTER TABLE reservations ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'confirmed'")
 
         # Create chat_history table
         cur.execute("""
@@ -96,6 +106,37 @@ def init_database():
                 customer_id INTEGER
             )
         """)
+
+        # Create products table - lets a shopkeeper add real products via the
+        # admin "Add Product" form. cuisine/diet/course are food-only fields;
+        # subcategory is beauty-only - nullable so either category leaves
+        # the other's columns empty rather than needing separate tables.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS products (
+                id SERIAL PRIMARY KEY,
+                category VARCHAR(20) NOT NULL,
+                name VARCHAR(200) NOT NULL,
+                price NUMERIC NOT NULL,
+                description TEXT,
+                image VARCHAR(500),
+                cuisine VARCHAR(50),
+                diet VARCHAR(100),
+                course VARCHAR(50),
+                subcategory VARCHAR(50),
+                is_deleted BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE")
+
+        # Food-only enrichment fields, food-side parity with the hardcoded
+        # menu (protein level, macro estimates, meal-time tags, fried flag) -
+        # nullable, since admin-added products don't collect these yet.
+        cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS protein VARCHAR(20)")
+        cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS nutrition JSONB")
+        cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS meal_time VARCHAR(100)")
+        cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS fried BOOLEAN DEFAULT FALSE")
+        cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS curry BOOLEAN DEFAULT FALSE")
 
         conn.commit()
         print("✅ Database tables initialized")

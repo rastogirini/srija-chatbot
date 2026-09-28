@@ -12,13 +12,15 @@ def truncate_to_sentences(text, max_sentences=2):
     don't reliably keep phi3 to "1-2 sentences" - it sometimes rambles or
     invents unrelated details - so this guarantees short replies regardless
     of what the model actually produced. A trailing fragment with no
-    terminal punctuation (cut off by the num_predict token cap) is dropped
-    rather than kept, since it isn't a real sentence."""
+    terminal punctuation (cut off by the num_predict token cap, or by a stop
+    sequence firing early) is dropped rather than kept, since it isn't a
+    real sentence - callers already have their own hardcoded fallback for
+    an empty/falsy response."""
     if not text:
         return text
     sentences = [s.strip() for s in re.findall(r'[^.!?]*[.!?]+', text.strip()) if s.strip()]
     if not sentences:
-        return text.strip()
+        return ""
     return ' '.join(sentences[:max_sentences])
 
 
@@ -60,10 +62,14 @@ def get_ollama_response(prompt, max_tokens=150):
                 # Hard cap so a rambling reply can't turn a 12s response into
                 # a much longer one - phi3 runs CPU-only here and is slow per-token.
                 "num_predict": max_tokens,
-                # phi3 tends to answer cleanly for one paragraph, then drift
-                # into an unrelated tangent or start fabricating the next
-                # customer turn - cut it off before that happens.
-                "stop": ["\n\n", "Customer:", "customer:"],
+                # phi3 sometimes starts fabricating the next customer turn -
+                # cut it off before that happens. (A blank-line stop used to
+                # be here too, but phi3 routinely opens a reply with
+                # "Hello Name,\n\n<the actual answer>" - that stop fired
+                # right after the salutation and threw away everything
+                # real, so it's gone; num_predict + these two stops already
+                # keep replies short.)
+                "stop": ["Customer:", "customer:"],
             },
         }
 

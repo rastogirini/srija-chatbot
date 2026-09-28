@@ -40,6 +40,7 @@ class ChatState(TypedDict, total=False):
     intent: str
     reservation_info: dict
     makeup_products: list
+    reservation_pending: Optional[dict]
     ai_response: str
     final_response: str
 
@@ -102,7 +103,8 @@ def build_customer_context(state: ChatState) -> ChatState:
                     history_text += f"  • {res['date']} at {res['time']} - Party of {res['party_size']}\n"
                 history_text += "\n"
 
-            recommendations_text = get_recommendations(customer) + "\n\n"
+            recs = get_recommendations(customer)
+            recommendations_text = (recs + "\n\n") if recs else ""
     else:
         if name:
             print(f"ℹ️ New customer: {name}")
@@ -158,12 +160,12 @@ def handle_greeting_node(state: ChatState) -> ChatState:
 
 
 def handle_reservation_node(state: ChatState) -> ChatState:
-    response = handle_reservation_request(
+    response, pending = handle_reservation_request(
         state["user_message"],
         state.get("customer"),
         state.get("reservation_info"),
     )
-    return {"ai_response": response}
+    return {"ai_response": response, "reservation_pending": pending}
 
 
 def handle_hours_node(state: ChatState) -> ChatState:

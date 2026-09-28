@@ -18,7 +18,35 @@ export default function CartPage({
   if (orderConfirmation) {
     return (
       <div style={{ padding: '60px 40px', maxWidth: '600px', margin: '0 auto', textAlign: 'center' }}>
-        {orderConfirmation.error ? (
+        {orderConfirmation.unavailable ? (
+          <>
+            <div style={{ fontSize: '40px', marginBottom: '12px' }}>🚫</div>
+            <h1 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e', margin: '0 0 8px' }}>
+              Some items are no longer available
+            </h1>
+            <p style={{ color: '#666', marginBottom: '8px' }}>
+              These have been removed from your cart:
+            </p>
+            <p style={{ color: '#b91c1c', fontWeight: '700', marginBottom: '24px' }}>
+              {orderConfirmation.unavailable.join(', ')}
+            </p>
+            <button
+              onClick={onDismissConfirmation}
+              style={{
+                padding: '12px 28px',
+                borderRadius: '10px',
+                border: '2px solid #667eea',
+                background: 'white',
+                color: '#667eea',
+                fontWeight: '700',
+                fontSize: '14px',
+                cursor: 'pointer',
+              }}
+            >
+              Back to Cart
+            </button>
+          </>
+        ) : orderConfirmation.error ? (
           <>
             <div style={{ fontSize: '40px', marginBottom: '12px' }}>😔</div>
             <h1 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e', margin: '0 0 8px' }}>
