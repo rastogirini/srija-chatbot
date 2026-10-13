@@ -1,10 +1,13 @@
-import { useState, useRef } from "react";
-import { useNavigate } from "react-router";
+import { useState, useRef, useEffect } from "react";
+import { useNavigate, useParams } from "react-router";
 
 const CUISINES = ["italian", "indian", "chinese"];
-const DIET_TAGS = ["vegetarian", "vegan", "gluten-free"];
+// Includes the calorie tags the migrated menu dishes carry - without them,
+// editing one of those dishes would silently drop its tags on save.
+const DIET_TAGS = ["vegetarian", "vegan", "gluten-free", "low-calorie", "high-calorie"];
 const COURSES = ["appetizer", "main", "dessert", "bread", "salad"];
-const SUBCATEGORIES = ["lipstick", "foundation", "skincare", "fragrance"];
+const BEAUTY_SUBCATEGORIES = ["lipstick", "foundation", "skincare", "fragrance"];
+const TOYS_SUBCATEGORIES = ["building-blocks", "action-figures", "board-games", "puzzles", "outdoor"];
 
 const inputStyle = {
   width: "100%",
@@ -26,9 +29,19 @@ const labelStyle = {
   display: "block",
 };
 
+const imageSrc = (path) => (path.startsWith("http") ? path : `http://localhost:5000${path}`);
+
+// Doubles as the Edit Product form: at /admin/products/:id/edit it loads
+// that product, pre-fills every field, and saves with PUT instead of POST.
 export default function AdminAddProduct() {
   const navigate = useNavigate();
+  const { id: editId } = useParams();
+  const isEdit = Boolean(editId);
   const fileInputRef = useRef(null);
+
+  const [originalName, setOriginalName] = useState("");
+  const [existingImage, setExistingImage] = useState(null);
+  const [loadingProduct, setLoadingProduct] = useState(isEdit);
 
   const [category, setCategory] = useState("food");
   const [name, setName] = useState("");
@@ -38,6 +51,7 @@ export default function AdminAddProduct() {
   const [dietTags, setDietTags] = useState([]);
   const [course, setCourse] = useState("");
   const [subcategory, setSubcategory] = useState("");
+  const [stock, setStock] = useState("");
 
   const [imageFile, setImageFile] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
@@ -52,6 +66,40 @@ export default function AdminAddProduct() {
     navigate("/");
   };
 
+  useEffect(() => {
+    if (!isEdit) return;
+    // A superseded load (React dev mode runs effects twice) must not land
+    // after the admin has started typing and overwrite their edits.
+    let ignore = false;
+    fetch(`http://localhost:5000/api/products/${editId}`, {
+      headers: { "X-Admin-Password": sessionStorage.getItem("admin_password") || "" },
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (ignore) return;
+        if (!data.success) {
+          setError(data.error || "Could not load this product.");
+          return;
+        }
+        const p = data.product;
+        setCategory(p.category);
+        setName(p.name);
+        setOriginalName(p.name);
+        setPrice(String(Number(p.price)));
+        setDescription(p.description || "");
+        setCuisine(p.cuisine || "");
+        setDietTags(p.diet ? p.diet.split(",").filter(Boolean) : []);
+        setCourse(p.course || "");
+        setSubcategory(p.subcategory || "");
+        setStock(p.stock === null ? "" : String(p.stock));
+        setExistingImage(p.image);
+        setImagePreview(p.image ? imageSrc(p.image) : null);
+      })
+      .catch(() => { if (!ignore) setError("Connection error. Please make sure the server is running."); })
+      .finally(() => { if (!ignore) setLoadingProduct(false); });
+    return () => { ignore = true; };
+  }, [editId, isEdit]);
+
   const handleFile = (file) => {
     if (!file || !file.type.startsWith("image/")) return;
     setImageFile(file);
@@ -64,7 +112,7 @@ export default function AdminAddProduct() {
 
   const resetForm = () => {
     setName(""); setPrice(""); setDescription("");
-    setCuisine(""); setDietTags([]); setCourse(""); setSubcategory("");
+    setCuisine(""); setDietTags([]); setCourse(""); setSubcategory(""); setStock("");
     setImageFile(null); setImagePreview(null);
   };
 
@@ -92,16 +140,21 @@ export default function AdminAddProduct() {
       } else {
         if (subcategory) formData.append("subcategory", subcategory);
       }
+      if (stock.trim()) formData.append("stock", stock.trim());
       if (imageFile) formData.append("image", imageFile);
+      // Edit only: the existing photo was removed and nothing replaced it.
+      if (isEdit && !imageFile && !imagePreview && existingImage) formData.append("remove_image", "true");
 
-      const response = await fetch("http://localhost:5000/api/products", {
-        method: "POST",
+      const response = await fetch(`http://localhost:5000/api/products${isEdit ? `/${editId}` : ""}`, {
+        method: isEdit ? "PUT" : "POST",
         headers: { "X-Admin-Password": sessionStorage.getItem("admin_password") || "" },
         body: formData,
       });
       const data = await response.json();
 
-      if (data.success) {
+      if (data.success && isEdit) {
+        navigate("/admin/products", { state: { flash: `"${name.trim()}" was updated.` } });
+      } else if (data.success) {
         setSuccess({ name: name.trim(), image: data.image });
         resetForm();
       } else {
@@ -147,9 +200,13 @@ export default function AdminAddProduct() {
           }}>
             ← Back to Products
           </button>
-          <h1 style={{ fontSize: "19px", fontWeight: "800", margin: 0 }}>📦 Add a New Product</h1>
+          <h1 style={{ fontSize: "19px", fontWeight: "800", margin: 0 }}>
+            {isEdit ? `✏️ Edit ${originalName || "Product"}` : "📦 Add a New Product"}
+          </h1>
           <p style={{ color: "rgba(255,255,255,0.8)", fontSize: "12.5px", margin: "2px 0 0" }}>
-            Upload a photo and the details - it'll be saved for real.
+            {isEdit
+              ? "Change any detail or the photo - sales history stays with the product, even if you rename it."
+              : "Upload a photo and the details - it'll be saved for real."}
           </p>
         </div>
       </div>
@@ -174,6 +231,9 @@ export default function AdminAddProduct() {
           </div>
         )}
 
+        {loadingProduct ? (
+          <div style={{ padding: "40px", textAlign: "center", color: "#aaa", fontSize: "13px" }}>Loading...</div>
+        ) : isEdit && !originalName ? null : (
         <form onSubmit={handleSubmit} style={{
           background: "white", borderRadius: "16px", padding: "26px",
           boxShadow: "0 4px 20px rgba(30,30,60,0.07)", border: "1px solid #eee",
@@ -244,7 +304,7 @@ export default function AdminAddProduct() {
             <div style={{ marginBottom: "16px" }}>
               <label style={labelStyle}>Category</label>
               <div style={{ display: "flex", gap: "8px" }}>
-                {[{ key: "food", label: "🍽️ Food" }, { key: "beauty", label: "💄 Beauty" }].map(opt => (
+                {[{ key: "food", label: "🍽️ Food" }, { key: "beauty", label: "💄 Beauty" }, { key: "toys", label: "🧸 Toys" }].map(opt => (
                   <button
                     key={opt.key}
                     type="button"
@@ -263,14 +323,23 @@ export default function AdminAddProduct() {
               </div>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: "12px", marginBottom: "12px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 110px", gap: "12px", marginBottom: "12px" }}>
               <div>
                 <label style={labelStyle}>Product Name</label>
                 <input style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Paneer Tikka" />
+                {isEdit && name.trim() && name.trim() !== originalName && (
+                  <div style={{ fontSize: "11.5px", color: "#4c51bf", marginTop: "5px" }}>
+                    Renaming from "{originalName}" - past orders under the old name still count toward this product.
+                  </div>
+                )}
               </div>
               <div>
                 <label style={labelStyle}>Price (₹)</label>
                 <input style={inputStyle} type="number" min="0" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="299" />
+              </div>
+              <div>
+                <label style={labelStyle}>Stock</label>
+                <input style={inputStyle} type="number" min="0" value={stock} onChange={(e) => setStock(e.target.value)} placeholder="Unlimited" />
               </div>
             </div>
 
@@ -328,7 +397,9 @@ export default function AdminAddProduct() {
                 <label style={labelStyle}>Product Type</label>
                 <select style={inputStyle} value={subcategory} onChange={(e) => setSubcategory(e.target.value)}>
                   <option value="">Select...</option>
-                  {SUBCATEGORIES.map(s => <option key={s} value={s}>{s[0].toUpperCase() + s.slice(1)}</option>)}
+                  {(category === "toys" ? TOYS_SUBCATEGORIES : BEAUTY_SUBCATEGORIES).map(s => (
+                    <option key={s} value={s}>{s.split("-").map(w => w[0].toUpperCase() + w.slice(1)).join(" ")}</option>
+                  ))}
                 </select>
               </div>
             )}
@@ -342,10 +413,11 @@ export default function AdminAddProduct() {
                 color: "white", fontWeight: "700", fontSize: "14px", cursor: loading ? "default" : "pointer",
               }}
             >
-              {loading ? "Saving..." : "Save Product"}
+              {loading ? "Saving..." : isEdit ? "Save Changes" : "Save Product"}
             </button>
           </div>
         </form>
+        )}
       </div>
     </div>
   );

@@ -18,6 +18,7 @@ import AdminHome from "./pages/Admin/Home";
 import AdminDashboard from "./pages/Admin/Dashboard";
 import AdminCustomerDetail from "./pages/Admin/CustomerDetail";
 import AdminAddProduct from "./pages/Admin/AddProduct";
+import AdminBulkUpload from "./pages/Admin/BulkUpload";
 import AdminProducts from "./pages/Admin/Products";
 import AdminOrders from "./pages/Admin/Orders";
 import AdminReservations from "./pages/Admin/Reservations";
@@ -47,6 +48,8 @@ function App() {
             <Route path="/admin/customers" element={<RequireAdmin><AdminDashboard /></RequireAdmin>} />
             <Route path="/admin/customers/:id" element={<RequireAdmin><AdminCustomerDetail /></RequireAdmin>} />
             <Route path="/admin/products/new" element={<RequireAdmin><AdminAddProduct /></RequireAdmin>} />
+            <Route path="/admin/products/bulk" element={<RequireAdmin><AdminBulkUpload /></RequireAdmin>} />
+            <Route path="/admin/products/:id/edit" element={<RequireAdmin><AdminAddProduct /></RequireAdmin>} />
             <Route path="/admin/products" element={<RequireAdmin><AdminProducts /></RequireAdmin>} />
             <Route path="/admin/orders" element={<RequireAdmin><AdminOrders /></RequireAdmin>} />
             <Route path="/admin/reservations" element={<RequireAdmin><AdminReservations /></RequireAdmin>} />

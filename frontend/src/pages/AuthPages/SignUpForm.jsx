@@ -18,6 +18,12 @@ const INTERESTS = [
     subtitle: "SKINCARE, COSMETICS, FRAGRANCE",
   },
   {
+    id: "toys",
+    icon: "🧸",
+    title: "Toys & Games",
+    subtitle: "BUILDING BLOCKS, PUZZLES, BOARD GAMES",
+  },
+  {
     id: "travel",
     icon: "✈️",
     title: "Travel",

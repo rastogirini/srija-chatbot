@@ -16,6 +16,7 @@ from customers import (
 from reservations import extract_reservation_info, get_history, handle_reservation_request
 from restaurant_info import handle_hours_request, handle_menu_request
 from beauty_info import handle_makeup_request, get_matching_products
+from toys_info import handle_toys_request, get_matching_products as get_matching_toys
 from intent import detect_intent
 from ai import get_ollama_response, format_history
 from db import save_chat_history
@@ -40,6 +41,7 @@ class ChatState(TypedDict, total=False):
     intent: str
     reservation_info: dict
     makeup_products: list
+    toys_products: list
     reservation_pending: Optional[dict]
     ai_response: str
     final_response: str
@@ -145,12 +147,15 @@ def handle_greeting_node(state: ChatState) -> ChatState:
     knows_interests = bool(interests)
     wants_food = (not knows_interests) or ("food" in interests)
     wants_beauty = (not knows_interests) or ("beauty" in interests)
+    wants_toys = (not knows_interests) or ("toys" in interests)
 
     offerings = []
     if wants_food:
         offerings.append("book a table or explore the menu")
     if wants_beauty:
         offerings.append("find your next favorite beauty pick, from lipstick to skincare")
+    if wants_toys:
+        offerings.append("find the perfect toy with our Gift Finder")
     if not offerings:
         # Interests known but none of them map to anything we actually
         # offer (e.g. only travel/fitness picked) - fall back to food.
@@ -181,6 +186,14 @@ def handle_makeup_node(state: ChatState) -> ChatState:
     return {
         "ai_response": handle_makeup_request(message, state.get("history")),
         "makeup_products": get_matching_products(message),
+    }
+
+
+def handle_toys_node(state: ChatState) -> ChatState:
+    message = state["user_message"]
+    return {
+        "ai_response": handle_toys_request(message, state.get("history")),
+        "toys_products": get_matching_toys(message),
     }
 
 
@@ -238,6 +251,7 @@ def _build_graph():
     graph.add_node("handle_hours_node", handle_hours_node)
     graph.add_node("handle_menu_node", handle_menu_node)
     graph.add_node("handle_makeup_node", handle_makeup_node)
+    graph.add_node("handle_toys_node", handle_toys_node)
     graph.add_node("handle_general_node", handle_general_node)
     graph.add_node("combine_response", combine_response)
     graph.add_node("persist_chat_history", persist_chat_history)
@@ -257,6 +271,7 @@ def _build_graph():
             "hours": "handle_hours_node",
             "menu": "handle_menu_node",
             "makeup": "handle_makeup_node",
+            "toys": "handle_toys_node",
             "general": "handle_general_node",
         },
     )
@@ -267,6 +282,7 @@ def _build_graph():
         "handle_hours_node",
         "handle_menu_node",
         "handle_makeup_node",
+        "handle_toys_node",
         "handle_general_node",
     ):
         graph.add_edge(handler_node, "combine_response")

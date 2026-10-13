@@ -12,6 +12,7 @@ import { useNavigate } from "react-router";
 const INTEREST_META = {
   food: { icon: '🍽️', label: 'Food', bg: '#fff7ed', text: '#c2410c', gradient: 'linear-gradient(135deg, #fdba74, #fb923c)' },
   beauty: { icon: '💄', label: 'Makeup', bg: '#fdf2f8', text: '#be185d', gradient: 'linear-gradient(135deg, #f9a8d4, #f472b6)' },
+  toys: { icon: '🧸', label: 'Toys', bg: '#f5f3ff', text: '#6d28d9', gradient: 'linear-gradient(135deg, #c4b5fd, #8b5cf6)' },
   travel: { icon: '✈️', label: 'Travel', bg: '#eff6ff', text: '#1d4ed8', gradient: 'linear-gradient(135deg, #93c5fd, #60a5fa)' },
   fitness: { icon: '💪', label: 'Fitness', bg: '#f0fdf4', text: '#15803d', gradient: 'linear-gradient(135deg, #86efac, #4ade80)' },
 };
@@ -337,6 +338,39 @@ export default function AdminDashboard() {
               </div>
             </div>
           )}
+
+          {!revenueLoading && revenue?.by_category?.length > 0 && (() => {
+            const total = revenue.by_category.reduce((sum, c) => sum + c.total, 0);
+            return (
+              <div style={{ marginTop: "20px", paddingTop: "18px", borderTop: "1px solid #f3f3f6" }}>
+                <div style={{ fontSize: "11px", fontWeight: "700", color: "#999", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "10px" }}>
+                  By Category (all-time)
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "14px" }}>
+                  {revenue.by_category.map(c => {
+                    const meta = INTEREST_META[c.category] || { icon: "❔", label: c.category, bg: "#f5f5f5", text: "#666" };
+                    const pct = total > 0 ? Math.round((c.total / total) * 100) : 0;
+                    return (
+                      <div key={c.category} style={{
+                        background: meta.bg, borderRadius: "12px", padding: "14px 16px",
+                        display: "flex", alignItems: "center", gap: "12px",
+                      }}>
+                        <span style={{ fontSize: "20px" }}>{meta.icon}</span>
+                        <div>
+                          <div style={{ fontSize: "12px", fontWeight: "700", color: meta.text }}>
+                            {meta.label} · {pct}%
+                          </div>
+                          <div style={{ fontSize: "15px", fontWeight: "800", color: "#1a1a2e" }}>
+                            ₹{Math.round(c.total).toLocaleString()}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
         </div>
 
         {!loading && !error && (

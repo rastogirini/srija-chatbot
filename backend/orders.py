@@ -193,6 +193,54 @@ def get_revenue_summary(weeks=8, months=6):
         conn.close()
 
 
+def get_revenue_by_category():
+    """Revenue split across 'food' and 'beauty', for the dashboard's
+    category breakdown - same name-matching limitation as
+    get_product_performance (orders link to a product by name, not id).
+    An order-item name with no matching product row at all (e.g. a since-
+    renamed or never-migrated item) falls into 'unknown' rather than being
+    silently dropped or misattributed. DISTINCT ON picks one category per
+    product name in case a name was ever reused across two rows."""
+    conn = get_db_connection()
+    if not conn:
+        return None
+
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            WITH sales AS (
+                SELECT
+                    elem->>'name' AS product_name,
+                    SUM(
+                        COALESCE((elem->>'qty')::int, 1)
+                        * COALESCE(NULLIF(REGEXP_REPLACE(elem->>'price', '[^0-9.]', '', 'g'), '')::numeric, 0)
+                    ) AS revenue
+                FROM orders, jsonb_array_elements(items) AS elem
+                GROUP BY elem->>'name'
+            ),
+            -- Every name a product has gone by (current + former), so a
+            -- renamed product's older orders still land in its category.
+            product_categories AS (
+                SELECT DISTINCT ON (known_name) known_name AS name, category
+                FROM products, unnest(array_prepend(name, COALESCE(former_names, '{}'))) AS known_name
+                ORDER BY known_name, created_at DESC
+            )
+            SELECT COALESCE(pc.category, 'unknown') AS category, SUM(s.revenue) AS revenue
+            FROM sales s
+            LEFT JOIN product_categories pc ON pc.name = s.product_name
+            GROUP BY COALESCE(pc.category, 'unknown')
+            ORDER BY revenue DESC
+        """)
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+    except Exception as e:
+        print(f"❌ Error getting revenue by category: {e}")
+        return None
+    finally:
+        conn.close()
+
+
 def get_top_spender_ids(limit=3):
     """The `limit` customers who have spent the most across all their
     orders - used to mark "star" customers on the admin dashboard. Only

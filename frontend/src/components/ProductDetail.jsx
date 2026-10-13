@@ -6,9 +6,11 @@ import QtyStepper from './QtyStepper';
 export default function ProductDetail({ product, onBack, onAddToCart, onDecreaseQty, qtyInCart = 0 }) {
   if (!product) return null;
 
-  const accent = product.kind === 'makeup' ? '#d6336c' : '#667eea';
-  const accentDark = product.kind === 'makeup' ? '#ae2f5c' : '#4c51bf';
-  const brand = product.kind === 'makeup' ? 'Srigen Beauty' : "Srija's Taste";
+  const KIND_META = {
+    makeup: { accent: '#d6336c', accentDark: '#ae2f5c', brand: 'Srigen Beauty' },
+    toys: { accent: '#8b5cf6', accentDark: '#6d28d9', brand: 'Srigen Toys' },
+  };
+  const { accent, accentDark, brand } = KIND_META[product.kind] || { accent: '#667eea', accentDark: '#4c51bf', brand: "Srija's Taste" };
   const sku = `SRG-${product.name.toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
 
   const isVeg = product.kind === 'food' && product.diet
@@ -148,7 +150,7 @@ export default function ProductDetail({ product, onBack, onAddToCart, onDecrease
             fontWeight: '600',
             marginBottom: '10px',
           }}>
-            ✅ In stock — {product.kind === 'makeup' ? 'ships within 2-3 days' : 'ready to prepare fresh'}
+            ✅ In stock — {product.kind === 'food' ? 'ready to prepare fresh' : 'ships within 2-3 days'}
           </div>
 
           <div style={{ display: 'flex', gap: '10px' }}>

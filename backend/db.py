@@ -138,6 +138,38 @@ def init_database():
         cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS fried BOOLEAN DEFAULT FALSE")
         cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS curry BOOLEAN DEFAULT FALSE")
 
+        # NULL (the default) means "untracked" - behaves exactly like today,
+        # unlimited availability - since there's no real inventory data
+        # behind any existing product. Tracking only turns on for a product
+        # once an admin explicitly sets a real stock number on it.
+        cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS stock INTEGER")
+
+        # One row per admin bulk upload (spreadsheet + photos). The uploaded
+        # file itself is never stored - only this summary, plus each product
+        # it created pointing back here via products.import_batch_id, which
+        # is what lets an old upload be re-downloaded later (rebuilt from the
+        # live product rows, so it shows current price/stock, not stale ones).
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS import_batches (
+                id SERIAL PRIMARY KEY,
+                filename VARCHAR(255),
+                added_count INTEGER DEFAULT 0,
+                skipped_count INTEGER DEFAULT 0,
+                warning_count INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # NULL for anything added one at a time (the "Add Product" form, the
+        # menu migration) - only bulk-imported products carry a batch id.
+        cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS import_batch_id INTEGER")
+
+        # Every name a product has had before an admin renamed it. Orders
+        # (and customers' saved carts) store item NAMES, not ids, so sales
+        # history, revenue-by-category and checkout stock checks match on
+        # name OR any former name - otherwise fixing a typo would orphan a
+        # product's whole sales history.
+        cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS former_names TEXT[] DEFAULT '{}'")
+
         conn.commit()
         print("✅ Database tables initialized")
         cur.close()

@@ -18,7 +18,35 @@ export default function CartPage({
   if (orderConfirmation) {
     return (
       <div style={{ padding: '60px 40px', maxWidth: '600px', margin: '0 auto', textAlign: 'center' }}>
-        {orderConfirmation.unavailable ? (
+        {orderConfirmation.insufficientStock ? (
+          <>
+            <div style={{ fontSize: '40px', marginBottom: '12px' }}>📦</div>
+            <h1 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e', margin: '0 0 8px' }}>
+              Not enough stock for some items
+            </h1>
+            <p style={{ color: '#666', marginBottom: '8px' }}>
+              We've adjusted your cart to what's actually available:
+            </p>
+            <p style={{ color: '#b45309', fontWeight: '700', marginBottom: '24px' }}>
+              {orderConfirmation.insufficientStock.map(i => `${i.name} (only ${i.available} left)`).join(', ')}
+            </p>
+            <button
+              onClick={onDismissConfirmation}
+              style={{
+                padding: '12px 28px',
+                borderRadius: '10px',
+                border: '2px solid #667eea',
+                background: 'white',
+                color: '#667eea',
+                fontWeight: '700',
+                fontSize: '14px',
+                cursor: 'pointer',
+              }}
+            >
+              Back to Cart
+            </button>
+          </>
+        ) : orderConfirmation.unavailable ? (
           <>
             <div style={{ fontSize: '40px', marginBottom: '12px' }}>🚫</div>
             <h1 style={{ fontSize: '22px', fontWeight: '700', color: '#1a1a2e', margin: '0 0 8px' }}>

@@ -7,19 +7,27 @@ import os
 from datetime import datetime
 from functools import wraps
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
 from db import init_database
 from customers import list_customers, find_customer_by_login, find_customer_by_email, find_customer_by_id, find_admin_by_password, save_customer, update_customer
 from reservations import list_reservations, get_reservations_by_customer_id, save_reservation, update_reservation_status, RESERVATION_STATUSES
-from orders import place_order, list_orders, get_orders_by_customer_id, get_revenue_summary, get_top_spender_ids, update_order_status, ORDER_STATUSES
+from orders import place_order, list_orders, get_orders_by_customer_id, get_revenue_summary, get_revenue_by_category, get_top_spender_ids, update_order_status, ORDER_STATUSES
 from chatbot_graph import run_chat
 from beauty_info import recommend_by_quiz
-from products import save_uploaded_image, save_product, list_products, soft_delete_product, find_unavailable_names, get_product_performance
+from toys_info import recommend_by_gift_finder
+from picks import build_picks
+from products import save_uploaded_image, save_product, get_product, name_taken, update_product, list_products, soft_delete_product, find_unavailable_names, get_product_performance, get_public_bestsellers, update_product_stock, find_insufficient_stock, decrement_stock
+from bulk_import import SpreadsheetError, read_spreadsheet, validate_rows, summarize, import_rows, list_import_batches, get_batch_products, build_template_xlsx, export_products_xlsx
+
+XLSX_MIMETYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": ["http://localhost:3000", "http://localhost:5173"]}})
+# Content-Disposition is exposed so the admin's spreadsheet downloads
+# (fetched with the admin header, not a plain link) can read the filename.
+CORS(app, resources={r"/api/*": {"origins": ["http://localhost:3000", "http://localhost:5173"]}},
+     expose_headers=["Content-Disposition"])
 
 conversation = []
 
@@ -98,6 +106,7 @@ def handle_chat():
                 'email': result["extracted_email"],
             },
             'makeup_products': result.get("makeup_products", []),
+            'toys_products': result.get("toys_products", []),
             # Set only when every required reservation detail is in and the
             # booking is ready for its final two preference questions. Holds
             # the collected details; the widget carries them through the
@@ -246,6 +255,23 @@ def makeup_quiz():
         print(f"❌ Error: {e}")
         return jsonify({'error': str(e), 'success': False}), 500
 
+@app.route('/api/toys/quiz', methods=['POST'])
+def toys_gift_finder():
+    """Turn the chatbot's 2-question Gift Finder quiz (recipient's age
+    range, occasion) into a small set of real catalog picks, each with a
+    one-line reason tied to the answer."""
+    try:
+        data = request.get_json() or {}
+        age_range = data.get('age_range')
+        occasion = data.get('occasion')
+        if age_range not in ('toddler', 'kid', 'tween') or occasion not in ('birthday', 'just-because'):
+            return jsonify({'error': 'Invalid quiz answers', 'success': False}), 400
+        picks = recommend_by_gift_finder(age_range, occasion)
+        return jsonify({'success': True, 'picks': picks}), 200
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return jsonify({'error': str(e), 'success': False}), 500
+
 @app.route('/api/analytics/revenue', methods=['GET'])
 @require_admin
 def get_revenue():
@@ -254,9 +280,15 @@ def get_revenue():
     summary = get_revenue_summary()
     if summary is None:
         return jsonify({'error': 'Database error', 'success': False}), 500
+
+    by_category = get_revenue_by_category()
+    if by_category is None:
+        return jsonify({'error': 'Database error', 'success': False}), 500
+
     return jsonify({
         'weekly': [{'bucket': row['bucket'].isoformat(), 'total': float(row['total'] or 0)} for row in summary['weekly']],
         'monthly': [{'bucket': row['bucket'].isoformat(), 'total': float(row['total'] or 0)} for row in summary['monthly']],
+        'by_category': [{'category': row['category'], 'total': float(row['revenue'] or 0)} for row in by_category],
         'success': True,
     }), 200
 
@@ -283,6 +315,93 @@ def get_products():
         return jsonify({'error': 'Database error', 'success': False}), 500
     return jsonify({'products': products, 'success': True}), 200
 
+@app.route('/api/products/bestsellers', methods=['GET'])
+def get_bestsellers():
+    """Top sellers across food/beauty/toys, for the customer-facing 'Best
+    Sellers' quick action - public (no admin gate), unlike
+    /api/products/performance which also exposes revenue/stock."""
+    bestsellers = get_public_bestsellers()
+    if bestsellers is None:
+        return jsonify({'error': 'Database error', 'success': False}), 500
+    return jsonify({'products': bestsellers, 'success': True}), 200
+
+def _product_form_data():
+    """Validate the Add/Edit Product form fields (multipart form data).
+    Returns (data, None), or (None, error message). Only the fields that
+    apply to the category are kept - switching a product from food to toys
+    on edit clears its cuisine/diet/course rather than leaving them behind."""
+    category = (request.form.get('category') or '').strip()
+    name = (request.form.get('name') or '').strip()
+
+    if category not in ('food', 'beauty', 'toys'):
+        return None, 'Category must be food, beauty, or toys'
+    if not name:
+        return None, 'Name is required'
+
+    try:
+        price = float(request.form.get('price', ''))
+    except (TypeError, ValueError):
+        return None, 'Price must be a number'
+    if price <= 0:
+        return None, 'Price must be greater than 0'
+
+    stock = None
+    stock_raw = (request.form.get('stock') or '').strip()
+    if stock_raw:
+        try:
+            stock = int(stock_raw)
+        except ValueError:
+            return None, 'Stock must be a whole number'
+        if stock < 0:
+            return None, 'Stock cannot be negative'
+
+    is_food = category == 'food'
+    return {
+        'category': category,
+        'name': name,
+        'price': price,
+        'description': (request.form.get('description') or '').strip(),
+        'cuisine': (request.form.get('cuisine') or None) if is_food else None,
+        'diet': (request.form.get('diet') or None) if is_food else None,
+        'course': (request.form.get('course') or None) if is_food else None,
+        'subcategory': None if is_food else (request.form.get('subcategory') or None),
+        'stock': stock,
+    }, None
+
+
+def _remove_uploaded_image(image_path):
+    """Delete a product photo file from disk - only ones this app uploaded
+    (/static/uploads/...), never an external URL."""
+    if not image_path or not image_path.startswith('/static/uploads/'):
+        return
+    full_path = os.path.join(os.path.dirname(__file__), image_path.lstrip('/'))
+    try:
+        if os.path.exists(full_path):
+            os.remove(full_path)
+    except OSError as e:
+        print(f"⚠️ Could not remove image file {full_path}: {e}")
+
+
+@app.route('/api/picks', methods=['POST'])
+def get_picks():
+    """Picks Made For You for the chatbot - see picks.py. Public, like the
+    rest of the customer-facing chat: a signed-in customer is identified by
+    the same name+email pair the chat already sends, and the response only
+    holds product names and reasons, never order details."""
+    data = request.get_json() or {}
+    exclude = data.get('exclude') or []
+    if not isinstance(exclude, list):
+        exclude = []
+    result = build_picks(
+        customer_name=data.get('customer_name'),
+        customer_email=data.get('customer_email'),
+        interests=data.get('interests') or [],
+        exclude=[str(name) for name in exclude[:200]],
+    )
+    if result is None:
+        return jsonify({'error': 'Database error', 'success': False}), 500
+    return jsonify({'success': True, **result}), 200
+
 @app.route('/api/products', methods=['POST'])
 @require_admin
 def create_product():
@@ -290,36 +409,161 @@ def create_product():
     data (an image file plus the product's text fields), so a shopkeeper can
     add a real product without a developer editing config.py."""
     try:
-        category = (request.form.get('category') or '').strip()
-        name = (request.form.get('name') or '').strip()
+        data, error = _product_form_data()
+        if error:
+            return jsonify({'error': error, 'success': False}), 400
 
-        if category not in ('food', 'beauty'):
-            return jsonify({'error': 'Category must be food or beauty', 'success': False}), 400
-        if not name:
-            return jsonify({'error': 'Name is required', 'success': False}), 400
-
-        try:
-            price = float(request.form.get('price', ''))
-        except (TypeError, ValueError):
-            return jsonify({'error': 'Price must be a number', 'success': False}), 400
+        taken = name_taken(data['name'])
+        if taken is None:
+            return jsonify({'error': 'Database error', 'success': False}), 500
+        if taken:
+            return jsonify({'error': f'A product named "{data["name"]}" already exists', 'success': False}), 409
 
         image_url = save_uploaded_image(request.files.get('image'))
-
-        data = {
-            'category': category,
-            'name': name,
-            'price': price,
-            'description': (request.form.get('description') or '').strip(),
-            'cuisine': request.form.get('cuisine') or None,
-            'diet': request.form.get('diet') or None,
-            'course': request.form.get('course') or None,
-            'subcategory': request.form.get('subcategory') or None,
-        }
         product_id = save_product(data, image_url)
         if not product_id:
             return jsonify({'error': 'Could not save product', 'success': False}), 500
 
         return jsonify({'success': True, 'product_id': product_id, 'image': image_url}), 200
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return jsonify({'error': str(e), 'success': False}), 500
+
+@app.route('/api/products/bulk', methods=['POST'])
+@require_admin
+def bulk_import_products():
+    """Bulk Upload: multipart form with `spreadsheet` (.csv/.xlsx) and any
+    number of `images`. ?mode=preview (the default) only validates and
+    returns a per-row report; ?mode=commit re-validates (never trusting an
+    earlier preview) and saves the importable rows as one batch."""
+    try:
+        mode = request.args.get('mode', 'preview')
+        if mode not in ('preview', 'commit'):
+            return jsonify({'error': 'mode must be preview or commit', 'success': False}), 400
+
+        spreadsheet = request.files.get('spreadsheet')
+        try:
+            rows = read_spreadsheet(spreadsheet)
+        except SpreadsheetError as e:
+            return jsonify({'error': str(e), 'success': False}), 400
+
+        images_by_name = {}
+        for image in request.files.getlist('images'):
+            if image and image.filename:
+                images_by_name.setdefault(os.path.basename(image.filename).lower(), image)
+
+        results = validate_rows(rows, set(images_by_name))
+        if results is None:
+            return jsonify({'error': 'Database error', 'success': False}), 500
+
+        # The internal parsed values aren't needed client-side - the preview
+        # shows the shopkeeper's own `raw` cells plus the status/messages.
+        report = [{k: v for k, v in r.items() if k != 'data'} for r in results]
+        summary = summarize(results)
+
+        if mode == 'preview':
+            return jsonify({'success': True, 'rows': report, 'summary': summary}), 200
+
+        if summary['ok'] + summary['warning'] == 0:
+            return jsonify({'error': 'No rows can be imported - fix the errors and try again', 'success': False}), 400
+
+        imported = import_rows(spreadsheet.filename, results, images_by_name)
+        if not imported:
+            return jsonify({'error': 'Import failed - nothing was saved', 'success': False}), 500
+
+        batch_id, added = imported
+        return jsonify({'success': True, 'batch_id': batch_id, 'added': added, 'rows': report, 'summary': summary}), 200
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return jsonify({'error': str(e), 'success': False}), 500
+
+@app.route('/api/products/bulk/template', methods=['GET'])
+@require_admin
+def download_bulk_template():
+    return send_file(build_template_xlsx(), mimetype=XLSX_MIMETYPE, as_attachment=True,
+                     download_name='product_upload_template.xlsx')
+
+@app.route('/api/products/import-batches', methods=['GET'])
+@require_admin
+def get_import_batches():
+    batches = list_import_batches()
+    if batches is None:
+        return jsonify({'error': 'Database error', 'success': False}), 500
+    return jsonify({'success': True, 'batches': [
+        {**b, 'created_at': b['created_at'].isoformat()} for b in batches
+    ]}), 200
+
+@app.route('/api/products/import-batches/<int:batch_id>/export', methods=['GET'])
+@require_admin
+def export_import_batch(batch_id):
+    """Re-download an old bulk upload, rebuilt from the products it created
+    (the original file was never stored) - current price/stock, with
+    products deleted since marked as such."""
+    batch, products = get_batch_products(batch_id)
+    if batch is None:
+        return jsonify({'error': 'Import not found', 'success': False}), 404
+    base = os.path.splitext(batch['filename'] or 'upload')[0]
+    return send_file(export_products_xlsx(products, request.host_url.rstrip('/'), title=f"Import {batch_id}"), mimetype=XLSX_MIMETYPE,
+                     as_attachment=True, download_name=f"{base}_import{batch_id}_{batch['created_at']:%Y-%m-%d}.xlsx")
+
+@app.route('/api/products/export', methods=['GET'])
+@require_admin
+def export_all_products():
+    products = list_products()
+    if products is None:
+        return jsonify({'error': 'Database error', 'success': False}), 500
+    return send_file(export_products_xlsx(products, request.host_url.rstrip('/')), mimetype=XLSX_MIMETYPE, as_attachment=True,
+                     download_name=f"all_products_{datetime.now():%Y-%m-%d}.xlsx")
+
+@app.route('/api/products/<int:product_id>', methods=['GET'])
+@require_admin
+def get_single_product(product_id):
+    """One product's current fields, to pre-fill the admin Edit form."""
+    product = get_product(product_id)
+    if not product:
+        return jsonify({'error': 'Product not found', 'success': False}), 404
+    return jsonify({'product': product, 'success': True}), 200
+
+@app.route('/api/products/<int:product_id>', methods=['PUT'])
+@require_admin
+def edit_product(product_id):
+    """Save the admin Edit form - same multipart fields as Add Product.
+    Photo: a new `image` file replaces the current one, `remove_image=true`
+    clears it, neither keeps it. A replaced/removed uploaded photo is
+    deleted from disk only after the database update succeeds."""
+    try:
+        data, error = _product_form_data()
+        if error:
+            return jsonify({'error': error, 'success': False}), 400
+
+        taken = name_taken(data['name'], exclude_id=product_id)
+        if taken is None:
+            return jsonify({'error': 'Database error', 'success': False}), 500
+        if taken:
+            return jsonify({'error': f'Another product is already named "{data["name"]}"', 'success': False}), 409
+
+        new_image = request.files.get('image')
+        if new_image and new_image.filename:
+            image_url = save_uploaded_image(new_image)
+            if not image_url:
+                return jsonify({'error': 'Photo must be a PNG, JPG, WEBP or GIF', 'success': False}), 400
+            result = update_product(product_id, data, image_url)
+        elif request.form.get('remove_image') == 'true':
+            image_url = None
+            result = update_product(product_id, data, None)
+        else:
+            image_url = None
+            result = update_product(product_id, data)
+
+        if result is None or not result[0]:
+            # The new photo was written before the update - don't leave it orphaned.
+            _remove_uploaded_image(image_url)
+            if result is None:
+                return jsonify({'error': 'Could not save changes', 'success': False}), 500
+            return jsonify({'error': 'Product not found', 'success': False}), 404
+
+        _remove_uploaded_image(result[1])
+        return jsonify({'success': True, 'product': get_product(product_id)}), 200
     except Exception as e:
         print(f"❌ Error: {e}")
         return jsonify({'error': str(e), 'success': False}), 500
@@ -337,15 +581,33 @@ def delete_product(product_id):
         if not found:
             return jsonify({'error': 'Product not found', 'success': False}), 404
 
-        if image_path and image_path.startswith('/static/'):
-            full_path = os.path.join(os.path.dirname(__file__), image_path.lstrip('/'))
-            try:
-                if os.path.exists(full_path):
-                    os.remove(full_path)
-            except OSError as e:
-                print(f"⚠️ Could not remove image file {full_path}: {e}")
-
+        _remove_uploaded_image(image_path)
         return jsonify({'success': True}), 200
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return jsonify({'error': str(e), 'success': False}), 500
+
+@app.route('/api/products/<int:product_id>/stock', methods=['PATCH'])
+@require_admin
+def patch_product_stock(product_id):
+    """Set a product's stock count, or clear it back to untracked/unlimited
+    by passing stock: null."""
+    try:
+        data = request.get_json() or {}
+        stock = data.get('stock')
+        if stock is not None:
+            try:
+                stock = int(stock)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Stock must be a whole number or null', 'success': False}), 400
+            if stock < 0:
+                return jsonify({'error': 'Stock cannot be negative', 'success': False}), 400
+
+        updated = update_product_stock(product_id, stock)
+        if not updated:
+            return jsonify({'error': 'Product not found', 'success': False}), 404
+
+        return jsonify({'success': True, 'stock': stock}), 200
     except Exception as e:
         print(f"❌ Error: {e}")
         return jsonify({'error': str(e), 'success': False}), 500
@@ -431,6 +693,16 @@ def create_order():
                 'success': False,
             }), 409
 
+        # Same checkout-time blocking pattern as the unavailable-items check
+        # above, for products an admin has turned stock tracking on for.
+        insufficient = find_insufficient_stock(items)
+        if insufficient:
+            return jsonify({
+                'error': 'Some items in your cart are no longer in stock',
+                'insufficient_stock': insufficient,
+                'success': False,
+            }), 409
+
         order = place_order(
             items,
             total,
@@ -440,6 +712,8 @@ def create_order():
         )
         if not order:
             return jsonify({'error': 'Could not place order', 'success': False}), 500
+
+        decrement_stock(items)
 
         return jsonify({'order': order, 'success': True}), 200
 

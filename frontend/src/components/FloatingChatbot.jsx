@@ -4,7 +4,44 @@ import './FloatingChatbot.css';
 import srijaChatBubble from '../assets/Srija_ChatBubble.png';
 import QtyStepper from './QtyStepper';
 
-export default function FloatingChatbot({ initialPersona, initialEmail, initialInterests, onViewProduct, onOpenChange, cart, onAddToCart, onDecreaseQty, onShowCart }) {
+// Products-table row -> the item shape the chatbot's cards and flows use.
+// Shared by the menus (loaded on mount) and the picks (whose rows come back
+// with the /api/picks response itself).
+const productImage = (p) => (p.image ? (p.image.startsWith('http') ? p.image : `http://localhost:5000${p.image}`) : '');
+
+const toFoodItem = (p) => ({
+  name: p.name,
+  price: Number(p.price),
+  cuisine: p.cuisine || 'indian',
+  type: p.course || 'main',
+  course: p.course || undefined,
+  protein: p.protein || 'medium',
+  diet: p.diet ? p.diet.split(',').filter(Boolean) : [],
+  time: p.meal_time ? p.meal_time.split(',').filter(Boolean) : ['lunch', 'dinner'],
+  fried: p.fried || false,
+  curry: p.curry || false,
+  image: productImage(p),
+  description: p.description || '',
+  nutrition: p.nutrition || null,
+});
+
+const toMakeupItem = (p) => ({
+  name: p.name,
+  price: Number(p.price),
+  category: p.subcategory || 'skincare',
+  description: p.description || '',
+  image: productImage(p),
+});
+
+const toToyItem = (p) => ({
+  name: p.name,
+  price: Number(p.price),
+  category: p.subcategory || 'building-blocks',
+  description: p.description || '',
+  image: productImage(p),
+});
+
+export default function FloatingChatbot({ initialPersona, initialEmail, initialInterests, onViewProduct, onOpenChange, cart, onAddToCart, onDecreaseQty, onShowCart, picksRequest }) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -20,10 +57,30 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
   // step, keyed by `${messageIndex}-${itemName}` so multiple such prompts
   // in the same conversation don't clash.
   const [candidateQty, setCandidateQty] = useState({});
-  // Shopkeeper-uploaded food products from the database (via the admin "Add
-  // Product" form) - merged into the hardcoded menu below so a newly added
-  // dish is actually findable through suggestions, not just stored.
+  // Shopkeeper-uploaded products from the database (via the admin "Add
+  // Product" form) - merged into the menus below so a newly added item is
+  // actually findable through suggestions, not just stored. Beauty/toys
+  // used to be a separate hardcoded array here (pre-dating the DB
+  // migration) just for this component's local budget-only suggestions -
+  // that meant an admin-added or admin-deleted beauty product never showed
+  // up correctly here even though every other beauty flow was already
+  // DB-driven, and toys was never added to it at all.
   const [dbFoodItems, setDbFoodItems] = useState([]);
+  const [dbBeautyItems, setDbBeautyItems] = useState([]);
+  const [dbToysItems, setDbToysItems] = useState([]);
+  // Top sellers across all categories (public, business-numbers-stripped
+  // version of the admin Best Sellers data) - for the "⭐ Best Sellers"
+  // quick action. Just the (category, name) pairs; the full item details
+  // come from foodMenu/makeupMenu/toysMenu below by matching on name, so
+  // the cards render with the same shape as everywhere else instead of a
+  // thinner one built from this endpoint's stripped-down fields.
+  const [bestSellers, setBestSellers] = useState([]);
+  // "Picks Made For You" (the page's hero button): every product name shown
+  // so far this session, so "Show me more" brings fresh ones; and a flag
+  // that holds the picks until the welcome greeting has landed, so they
+  // appear below it rather than being overwritten by it.
+  const [shownPicks, setShownPicks] = useState([]);
+  const [pendingPicks, setPendingPicks] = useState(false);
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -31,6 +88,18 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
       .then(res => res.json())
       .then(data => { if (data.success) setDbFoodItems(data.products); })
       .catch(err => console.error('Could not load uploaded food products:', err));
+    fetch('http://localhost:5000/api/products?category=beauty')
+      .then(res => res.json())
+      .then(data => { if (data.success) setDbBeautyItems(data.products); })
+      .catch(err => console.error('Could not load uploaded beauty products:', err));
+    fetch('http://localhost:5000/api/products?category=toys')
+      .then(res => res.json())
+      .then(data => { if (data.success) setDbToysItems(data.products); })
+      .catch(err => console.error('Could not load uploaded toys products:', err));
+    fetch('http://localhost:5000/api/products/bestsellers')
+      .then(res => res.json())
+      .then(data => { if (data.success) setBestSellers(data.products); })
+      .catch(err => console.error('Could not load best sellers:', err));
   }, []);
 
   const cartCount = cart.reduce((sum, c) => sum + c.qty, 0);
@@ -44,21 +113,7 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
   // so those come back null/default - renderFoodCard and the meal composer
   // already tolerate that (missing nutrition line, medium-protein default,
   // no curry-only bread pairing).
-  const foodMenu = dbFoodItems.map(p => ({
-    name: p.name,
-    price: Number(p.price),
-    cuisine: p.cuisine || 'indian',
-    type: p.course || 'main',
-    course: p.course || undefined,
-    protein: p.protein || 'medium',
-    diet: p.diet ? p.diet.split(',').filter(Boolean) : [],
-    time: p.meal_time ? p.meal_time.split(',').filter(Boolean) : ['lunch', 'dinner'],
-    fried: p.fried || false,
-    curry: p.curry || false,
-    image: p.image ? (p.image.startsWith('http') ? p.image : `http://localhost:5000${p.image}`) : '',
-    description: p.description || '',
-    nutrition: p.nutrition || null,
-  }));
+  const foodMenu = dbFoodItems.map(toFoodItem);
 
   // A distinct icon per dish, rather than the same fork-and-knife everywhere
   const FOOD_ICONS = {
@@ -141,6 +196,21 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
       }
     }
   }, [isOpen]);
+
+  // The page's "Explore Picks Made For You" button bumps picksRequest:
+  // open the chat, then show picks once the greeting (if any) has arrived.
+  useEffect(() => {
+    if (!picksRequest) return;
+    setIsOpen(true);
+    setPendingPicks(true);
+  }, [picksRequest]);
+
+  useEffect(() => {
+    if (pendingPicks && isOpen && !loading && messages.length > 0) {
+      setPendingPicks(false);
+      showPicks();
+    }
+  }, [pendingPicks, isOpen, loading, messages.length]);
 
   // Thinking message rotation
   useEffect(() => {
@@ -246,6 +316,19 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
         );
       }
     }
+
+    // A message that's clearly about toys or beauty (e.g. "suggest me some
+    // toys", "suggest a lipstick"), but didn't actually match any real food
+    // dish/keyword, isn't a food suggestion request - without this check,
+    // isSuggestionRequest below would still fire on words like "suggest",
+    // and suggestDishes() always returns *something* regardless of
+    // category, so the customer would see random desserts instead of toys
+    // or beauty picks. Returning null here lets the message fall through to
+    // the real backend chat call, which routes it to the correct intent
+    // (toys_info.py / beauty_info.py) instead.
+    const mentionsOtherCategory = !dishKeyword && matchedProducts.length === 0 &&
+      /\b(toys?|lego|board game|puzzles?|action figures?|building blocks?|rubik|playset|lipstick|makeup|make-up|skincare|skin care|foundation|fragrance|perfume|cosmetics?|beauty)\b/i.test(message);
+    if (mentionsOtherCategory) return null;
 
     // Check if user is asking for suggestions
     const isSuggestionRequest = lowerMsg.includes('suggest') ||
@@ -573,23 +656,122 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
     return picks;
   };
 
-  // Beauty catalog, mirroring the backend's MAKEUP_DATA - kept client-side so
-  // budget-only suggestions can combine food + makeup instantly, same as
-  // how food suggestions already work without a backend round trip.
-  const makeupMenu = [
-    { name: 'Velvet Matte Lipstick', price: 899, category: 'lipstick', description: 'Long-lasting matte finish in classic red', image: 'https://images.unsplash.com/photo-1586495777744-4413f21062fa?w=400&h=300&fit=crop' },
-    { name: 'Glossy Tint Lip Balm', price: 499, category: 'lipstick', description: 'Sheer, hydrating tint with a glossy finish', image: 'https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?w=400&h=300&fit=crop' },
-    { name: 'Silk Finish Foundation', price: 1299, category: 'foundation', description: 'Lightweight, buildable coverage for all-day wear', image: 'https://images.unsplash.com/photo-1571875257727-256c39da42af?w=400&h=300&fit=crop' },
-    { name: 'BB Cream SPF 30', price: 799, category: 'foundation', description: 'Sheer coverage with sun protection', image: 'https://images.unsplash.com/photo-1571781926291-c477ebfd024b?w=400&h=300&fit=crop' },
-    { name: 'Hydrating Serum', price: 1499, category: 'skincare', description: 'Hyaluronic acid serum for deep hydration', image: 'https://images.unsplash.com/photo-1620916566398-39f1143ab7be?w=400&h=300&fit=crop' },
-    { name: 'Vitamin C Face Cream', price: 1099, category: 'skincare', description: 'Brightening daily moisturizer', image: 'https://images.unsplash.com/photo-1556228720-195a672e8a03?w=400&h=300&fit=crop' },
-    { name: 'Floral Eau de Parfum', price: 2499, category: 'fragrance', description: 'A delicate floral scent with hints of jasmine', image: 'https://images.unsplash.com/photo-1541643600914-78b084683601?w=400&h=300&fit=crop' },
-    { name: 'Citrus Body Mist', price: 699, category: 'fragrance', description: 'Light, refreshing citrus fragrance', image: 'https://images.unsplash.com/photo-1592945403244-b3fbafd7f539?w=400&h=300&fit=crop' },
-  ];
+  // Beauty and toys catalogs, DB-driven (same products table every other
+  // beauty/toys flow already reads from) so budget-only suggestions can
+  // combine food + beauty + toys instantly, without a backend round trip -
+  // same reasoning as foodMenu being built from dbFoodItems above.
+  const makeupMenu = dbBeautyItems.map(toMakeupItem);
+  const toysMenu = dbToysItems.map(toToyItem);
 
   const suggestMakeup = (criteria) => {
     if (!criteria.budget) return [];
     return makeupMenu.filter(item => item.price <= criteria.budget);
+  };
+
+  const suggestToys = (criteria) => {
+    if (!criteria.budget) return [];
+    return toysMenu.filter(item => item.price <= criteria.budget);
+  };
+
+  // "⭐ Best Sellers" quick action: look up each top-seller's full details
+  // (nutrition, diet, subcategory, etc.) in the already-loaded menus by
+  // name, rather than rendering straight off the bestSellers endpoint's
+  // stripped-down fields - keeps the cards identical in shape to every
+  // other suggestion list, not a thinner one-off format.
+  const suggestBestSellers = () => {
+    const results = [];
+    for (const item of bestSellers) {
+      if (item.category === 'food') {
+        const match = foodMenu.find(f => f.name === item.name);
+        if (match) results.push({ ...match, kind: 'food' });
+      } else if (item.category === 'beauty') {
+        const match = makeupMenu.find(m => m.name === item.name);
+        if (match) results.push({ ...match, kind: 'makeup' });
+      } else if (item.category === 'toys') {
+        const match = toysMenu.find(t => t.name === item.name);
+        if (match) results.push({ ...match, kind: 'toys' });
+      }
+    }
+    return results;
+  };
+
+  // "Picks Made For You": the backend (picks.py) chooses the products and
+  // why, and sends each product's full row along - converted with the same
+  // to*Item functions the menus use, so the cards look like every other one.
+  const PICK_GROUPS = {
+    food: { label: '🍽️ Food', kind: 'food', toItem: toFoodItem },
+    beauty: { label: '💄 Beauty', kind: 'makeup', toItem: toMakeupItem },
+    toys: { label: '🧸 Toys', kind: 'toys', toItem: toToyItem },
+  };
+
+  const showPicks = async (more = false) => {
+    setLoading(true);
+    try {
+      const response = await fetch('http://localhost:5000/api/picks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customer_name: initialPersona,
+          customer_email: initialEmail,
+          interests: initialInterests,
+          exclude: more ? shownPicks : [],
+        }),
+      });
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error);
+
+      const groups = data.groups
+        .map(group => {
+          const meta = PICK_GROUPS[group.category];
+          if (!meta) return null;
+          const items = group.picks
+            .map(pick => pick.product
+              ? { ...meta.toItem(pick.product), kind: meta.kind, reason: pick.reason, reasonType: pick.reason_type }
+              : null)
+            .filter(Boolean);
+          return items.length ? { category: group.category, label: meta.label, items } : null;
+        })
+        .filter(Boolean);
+
+      if (groups.length === 0) {
+        setMessages(prev => [...prev, { role: 'bot', content: "I couldn't find picks for you right now - try the quick actions below!" }]);
+        return;
+      }
+
+      setShownPicks(prev => [...prev, ...groups.flatMap(g => g.items.map(i => i.name))]);
+      const intro = more
+        ? '🔄 Here are a few more:'
+        : data.name ? `✨ Here's what I picked for you, ${data.name}:` : "✨ Here are our most-loved picks:";
+      setMessages(prev => [...prev, { role: 'bot', content: 'picks', intro, groups, guest: data.guest }]);
+    } catch (error) {
+      setMessages(prev => [...prev, { role: 'bot', content: "Sorry, I couldn't load your picks just now. Please try again in a moment." }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Follow-up chips under the picks - the matching interactive flow for
+  // each category shown (shade quiz, Gift Finder, meal builder).
+  const PICK_FOLLOW_UPS = {
+    food: { label: '🍽️ Build my meal', message: 'Suggest a meal for me' },
+    beauty: { label: '💄 Find my shade', message: 'Find my shade' },
+    toys: { label: '🎁 Gift Finder', message: 'Gift finder' },
+  };
+
+  // "🎁 Gift Ideas" quick action: one giftable pick per category - a
+  // dessert (food), a fragrance (beauty, a classic gift pick), and
+  // whatever's first in the toys catalog. Not data-driven like Best
+  // Sellers, just a simple honest "here's one of each" - same spirit as
+  // beauty's quiz picks, which are also first-match, not a ranking.
+  const suggestGiftIdeas = () => {
+    const results = [];
+    const foodGift = foodMenu.find(d => d.course === 'dessert') || foodMenu[0];
+    if (foodGift) results.push({ ...foodGift, kind: 'food' });
+    const beautyGift = makeupMenu.find(m => m.category === 'fragrance') || makeupMenu[0];
+    if (beautyGift) results.push({ ...beautyGift, kind: 'makeup' });
+    const toyGift = toysMenu[0];
+    if (toyGift) results.push({ ...toyGift, kind: 'toys' });
+    return results;
   };
 
   // Product card with real image + View/Add to cart, used for makeup items
@@ -639,12 +821,21 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
           background: '#f5f5f5',
           borderRadius: '6px',
           flexShrink: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
         }}>
-          <img
-            src={item.image}
-            alt={item.name}
-            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', flexShrink: 0, minWidth: '100%', maxWidth: 'none' }}
-          />
+          {/* Products added without a photo get their icon instead of an
+              empty <img> (which renders as a blank box). */}
+          {item.image ? (
+            <img
+              src={item.image}
+              alt={item.name}
+              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', flexShrink: 0, minWidth: '100%', maxWidth: 'none' }}
+            />
+          ) : (
+            <span style={{ fontSize: '24px', opacity: 0.7 }}>{icon || '📦'}</span>
+          )}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
@@ -756,6 +947,23 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
     },
   });
 
+  const renderToyCard = (item, idx, priceDisplay) => renderProductCard(item, idx, {
+    accent: '#8b5cf6',
+    accentDark: '#6d28d9',
+    categoryLabel: item.category || 'toys',
+    icon: '🧸',
+    descriptionText: item.description,
+    priceDisplay,
+    viewProduct: {
+      kind: 'toys',
+      name: item.name,
+      image: item.image,
+      description: item.description,
+      category: item.category || 'toys',
+      price: priceDisplay,
+    },
+  });
+
   const renderFoodCard = (item, idx) => renderProductCard(item, idx, {
     accent: '#667eea',
     accentDark: '#4c51bf',
@@ -780,10 +988,13 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
     },
   });
 
-  const handleSend = async () => {
-    if (!input.trim()) return;
+  // `text` lets a button send a message in one click (the picks follow-up
+  // chips); the Send button/Enter key pass nothing (or an event) and send
+  // whatever is typed in the box.
+  const handleSend = async (text) => {
+    const userMessage = typeof text === 'string' ? text : input;
+    if (!userMessage.trim()) return;
 
-    const userMessage = input;
     setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
     setInput('');
 
@@ -807,6 +1018,55 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
         { role: 'bot', content: "Let's find your match! Two quick questions:" },
         { role: 'bot', content: 'makeup_quiz', step: 'skin_type' },
       ]);
+      return;
+    }
+
+    // Gift Finder quiz trigger - same 2-question-flow-in-the-widget pattern
+    // as the shade quiz above, just for toys instead of beauty. The second
+    // half (mentions both "gift" and "toy(s)" somewhere, in either order)
+    // catches natural phrasings like "I have to gift toys, suggest some" or
+    // "need a toy as a gift" - without it, a message like that fell through
+    // to the backend's generic toys catalog (every item, no filtering)
+    // instead of the actual quiz the customer was describing.
+    const wantsGiftFinder = /\b(gift finder|find a gift|help me (choose|pick) a (toy|gift)|toy quiz|gift idea)\b/i.test(userMessage) ||
+      (/\bgift(s|ing)?\b/i.test(userMessage) && /\btoys?\b/i.test(userMessage));
+    if (wantsGiftFinder) {
+      setMessages(prev => [...prev,
+        { role: 'bot', content: "Let's find the perfect gift! Two quick questions:" },
+        { role: 'bot', content: 'toys_quiz', step: 'age_range' },
+      ]);
+      return;
+    }
+
+    // "⭐ Best Sellers" and "🎁 Gift Ideas" quick actions - instant,
+    // cross-category suggestion lists (same card renderer as the
+    // Budget Friendly flow further below), gated by interest the same way
+    // so a food-only customer doesn't get beauty/toys pushed unprompted.
+    const knowsInterestsForPills = initialInterests && initialInterests.length > 0;
+    const wantsBeautyForPills = !knowsInterestsForPills || initialInterests.includes('beauty');
+    const wantsToysForPills = !knowsInterestsForPills || initialInterests.includes('toys');
+    const matchesInterestGate = (item) =>
+      item.kind === 'food' || (item.kind === 'makeup' && wantsBeautyForPills) || (item.kind === 'toys' && wantsToysForPills);
+
+    const wantsBestSellers = /\b(best sellers?|bestsellers?|top sellers?|popular (items|picks|products))\b/i.test(userMessage);
+    if (wantsBestSellers) {
+      const results = suggestBestSellers().filter(matchesInterestGate);
+      if (results.length === 0) {
+        setMessages(prev => [...prev, { role: 'bot', content: "I don't have enough sales data yet to show best sellers - check back soon!" }]);
+        return;
+      }
+      setMessages(prev => [...prev, { role: 'bot', content: 'suggestions', suggestions: results, intro: '⭐ Best Sellers:' }]);
+      return;
+    }
+
+    const wantsGiftIdeas = /\bgift ideas\b/i.test(userMessage);
+    if (wantsGiftIdeas) {
+      const results = suggestGiftIdeas().filter(matchesInterestGate);
+      if (results.length === 0) {
+        setMessages(prev => [...prev, { role: 'bot', content: "I don't have gift ideas to show right now - try again in a moment!" }]);
+        return;
+      }
+      setMessages(prev => [...prev, { role: 'bot', content: 'suggestions', suggestions: results, intro: '🎁 Gift Ideas:' }]);
       return;
     }
 
@@ -883,6 +1143,7 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
       const allItems = [
         ...foodMenu.map(item => ({ ...item, kind: 'food' })),
         ...makeupMenu.map(item => ({ ...item, kind: 'makeup' })),
+        ...toysMenu.map(item => ({ ...item, kind: 'toys' })),
       ];
       const matchedItem = allItems.find(item => {
         const escaped = item.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -903,11 +1164,11 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
               price: `₹${matchedItem.price}`,
             }
           : {
-              kind: 'makeup',
+              kind: matchedItem.kind === 'toys' ? 'toys' : 'makeup',
               name: matchedItem.name,
               image: matchedItem.image,
               description: matchedItem.description,
-              category: matchedItem.category || 'beauty',
+              category: matchedItem.category || (matchedItem.kind === 'toys' ? 'toys' : 'beauty'),
               price: `₹${matchedItem.price}`,
             };
 
@@ -968,22 +1229,26 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
     }
 
     // Handle food (and, for budget-only asks with no food-specific
-    // qualifier, makeup) suggestions
+    // qualifier, beauty + toys) suggestions
     if (suggestionCriteria) {
       const isBudgetOnly = suggestionCriteria.budget && !suggestionCriteria.mealTime && !suggestionCriteria.diet && !suggestionCriteria.cuisine;
 
-      // Don't proactively surface makeup for a customer who never said
-      // they're interested in beauty (e.g. "Budget Friendly" for a
+      // Don't proactively surface beauty/toys for a customer who never said
+      // they're interested in that category (e.g. "Budget Friendly" for a
       // food+travel customer shouldn't come back with a lipstick). Unknown
-      // interests (guest, no sign-up) keeps the old behavior of showing both.
+      // interests (guest, no sign-up) keeps the old behavior of showing all.
       const knowsInterests = initialInterests && initialInterests.length > 0;
       const wantsBeautySuggestions = !knowsInterests || initialInterests.includes('beauty');
+      const wantsToysSuggestions = !knowsInterests || initialInterests.includes('toys');
 
       const foodResults = suggestDishes(suggestionCriteria).map(item => ({ ...item, kind: 'food' }));
       const makeupResults = (isBudgetOnly && wantsBeautySuggestions)
         ? suggestMakeup(suggestionCriteria).map(item => ({ ...item, kind: 'makeup' }))
         : [];
-      const suggestions = [...foodResults, ...makeupResults];
+      const toysResults = (isBudgetOnly && wantsToysSuggestions)
+        ? suggestToys(suggestionCriteria).map(item => ({ ...item, kind: 'toys' }))
+        : [];
+      const suggestions = [...foodResults, ...makeupResults, ...toysResults];
 
       if (suggestions.length === 0) {
         setMessages(prev => [...prev, {
@@ -1016,7 +1281,7 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
       // actual conversation instead of answering each message cold. Skips
       // structured messages (suggestion cards) since they aren't text.
       const history = messages
-        .filter(m => typeof m.content === 'string' && m.content !== 'suggestions' && m.content !== 'makeup_suggestions' && m.content !== 'meal_suggestions' && m.content !== 'reservation_preferences' && m.content !== 'makeup_quiz' && m.content !== 'makeup_quiz_results')
+        .filter(m => typeof m.content === 'string' && m.content !== 'suggestions' && m.content !== 'makeup_suggestions' && m.content !== 'toys_suggestions' && m.content !== 'meal_suggestions' && m.content !== 'reservation_preferences' && m.content !== 'makeup_quiz' && m.content !== 'makeup_quiz_results' && m.content !== 'toys_quiz' && m.content !== 'toys_quiz_results' && m.content !== 'picks')
         .slice(-10)
         .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content }));
 
@@ -1051,6 +1316,9 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
         }
         if (data.makeup_products && data.makeup_products.length > 0) {
           newMessages.push({ role: 'bot', content: 'makeup_suggestions', products: data.makeup_products });
+        }
+        if (data.toys_products && data.toys_products.length > 0) {
+          newMessages.push({ role: 'bot', content: 'toys_suggestions', products: data.toys_products });
         }
         // All required reservation details are in but nothing's saved yet -
         // ask the two preference questions, then finalize. `pending` holds
@@ -1188,6 +1456,46 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
     }
   };
 
+  // Gift Finder quiz, step 1 of 2: recipient's age range. Nothing is
+  // fetched yet - the answer just rides forward to the second question.
+  const handleAgeRangeChoice = (ageRange) => {
+    const labels = { toddler: '🧸 Toddler (1-3)', kid: '🎈 Kid (4-9)', tween: '🎮 Tween (10-12)' };
+    setMessages(prev => [...prev,
+      { role: 'user', content: labels[ageRange] },
+      { role: 'bot', content: 'toys_quiz', step: 'occasion', ageRange },
+    ]);
+  };
+
+  // Step 2 of 2: the occasion. This is where the backend is finally
+  // called - once, with both answers - to turn them into real catalog
+  // picks with a reason each.
+  const handleOccasionChoice = async (ageRange, occasion) => {
+    const labels = { birthday: '🎂 Birthday', 'just-because': '💝 Just because' };
+    setMessages(prev => [...prev, { role: 'user', content: labels[occasion] }]);
+    setLoading(true);
+    try {
+      const res = await fetch('http://localhost:5000/api/toys/quiz', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ age_range: ageRange, occasion }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setMessages(prev => [...prev,
+          { role: 'bot', content: "Here's what I'd suggest:" },
+          { role: 'bot', content: 'toys_quiz_results', picks: data.picks },
+        ]);
+      } else {
+        setMessages(prev => [...prev, { role: 'bot', content: data.error || 'Sorry, I could not put that together. Please try again.' }]);
+      }
+    } catch (error) {
+      console.error('Error fetching gift finder results:', error);
+      setMessages(prev => [...prev, { role: 'bot', content: 'Connection error while finding a gift. Please try again.' }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleKeyPress = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -1291,9 +1599,10 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
                   </div>
                 )}
 
-                {msg.role === 'bot' && msg.content !== 'suggestions' && msg.content !== 'makeup_suggestions' && msg.content !== 'meal_suggestions' &&
+                {msg.role === 'bot' && msg.content !== 'suggestions' && msg.content !== 'makeup_suggestions' && msg.content !== 'toys_suggestions' && msg.content !== 'meal_suggestions' &&
                   msg.content !== 'meal_addition_prompt' && msg.content !== 'meal_replace_prompt' && msg.content !== 'reservation_preferences' &&
-                  msg.content !== 'makeup_quiz' && msg.content !== 'makeup_quiz_results' && (
+                  msg.content !== 'makeup_quiz' && msg.content !== 'makeup_quiz_results' && msg.content !== 'toys_quiz' && msg.content !== 'toys_quiz_results' &&
+                  msg.content !== 'picks' && (
                   <div className="message bot">
                     <div className="message-content">
                       {msg.content}
@@ -1315,12 +1624,80 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
                       fontSize: '14px',
                       fontWeight: '600'
                     }}>
-                      {msg.intro || `🎯 ${msg.suggestions.some(s => s.kind === 'makeup') ? 'Suggested Picks:' : 'Suggested Dishes:'}`}
+                      {msg.intro || `🎯 ${msg.suggestions.some(s => s.kind === 'makeup' || s.kind === 'toys') ? 'Suggested Picks:' : 'Suggested Dishes:'}`}
                     </h4>
                     {msg.suggestions.map((item, idx) =>
                       item.kind === 'makeup'
                         ? renderMakeupCard(item, idx, `₹${item.price}`)
+                        : item.kind === 'toys'
+                        ? renderToyCard(item, idx, `₹${item.price}`)
                         : renderFoodCard(item, idx)
+                    )}
+                  </div>
+                )}
+
+                {/* Picks Made For You - grouped by interest, each card with
+                    the reason it was picked, then follow-up chips */}
+                {msg.role === 'bot' && msg.content === 'picks' && (
+                  <div style={{
+                    margin: '10px 0',
+                    padding: '12px',
+                    background: 'linear-gradient(135deg, #f0f4ff 0%, #fdf2f8 100%)',
+                    borderRadius: '8px'
+                  }}>
+                    <h4 style={{ margin: '0 0 10px 0', color: '#667eea', fontSize: '14px', fontWeight: '600' }}>
+                      {msg.intro}
+                    </h4>
+                    {msg.groups.map(group => (
+                      <div key={group.category} style={{ marginBottom: '8px' }}>
+                        {msg.groups.length > 1 && (
+                          <div style={{ fontSize: '11px', fontWeight: '800', color: '#888', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '6px 0 4px' }}>
+                            {group.label}
+                          </div>
+                        )}
+                        {group.items.map((item, idx) => (
+                          <div key={item.name}>
+                            <div style={{
+                              fontSize: '11.5px', fontWeight: '600', lineHeight: 1.4, padding: '5px 9px', borderRadius: '8px', margin: '6px 0 4px',
+                              color: item.reasonType === 'loved' ? '#be185d' : item.reasonType === 'new' ? '#0f766e' : '#b45309',
+                              background: item.reasonType === 'loved' ? '#fdf2f8' : item.reasonType === 'new' ? '#f0fdfa' : '#fffbeb',
+                              border: `1px solid ${item.reasonType === 'loved' ? '#fbcfe8' : item.reasonType === 'new' ? '#99f6e4' : '#fde68a'}`,
+                            }}>
+                              {item.reasonType === 'loved' ? '🔁' : item.reasonType === 'new' ? '🆕' : item.reasonType === 'best' ? '⭐' : '👀'} {item.reason}
+                            </div>
+                            {item.kind === 'makeup'
+                              ? renderMakeupCard(item, idx, `₹${item.price}`)
+                              : item.kind === 'toys'
+                              ? renderToyCard(item, idx, `₹${item.price}`)
+                              : renderFoodCard(item, idx)}
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                    {msg.guest && (
+                      <div style={{ fontSize: '12px', color: '#666', margin: '6px 0 2px' }}>
+                        💡 Sign up to get picks made just for you, based on what you love.
+                      </div>
+                    )}
+                    {/* Chips only on the latest picks message, so older ones
+                        don't leave a trail of duplicate buttons. */}
+                    {i === messages.map(m => m.content).lastIndexOf('picks') && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '10px' }}>
+                        {msg.groups.map(group => PICK_FOLLOW_UPS[group.category]).filter(Boolean).map(chip => (
+                          <button key={chip.label} onClick={() => handleSend(chip.message)} disabled={loading} style={{
+                            background: 'white', border: '1px solid #c7cbf5', color: '#4c51bf', borderRadius: '999px',
+                            padding: '6px 12px', fontSize: '12px', fontWeight: '700', cursor: 'pointer',
+                          }}>
+                            {chip.label}
+                          </button>
+                        ))}
+                        <button onClick={() => showPicks(true)} disabled={loading} style={{
+                          background: 'linear-gradient(135deg, #667eea, #764ba2)', border: 'none', color: 'white', borderRadius: '999px',
+                          padding: '6px 12px', fontSize: '12px', fontWeight: '700', cursor: 'pointer',
+                        }}>
+                          🔄 Show me more
+                        </button>
+                      </div>
                     )}
                   </div>
                 )}
@@ -1505,6 +1882,26 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
                   </div>
                 )}
 
+                {/* Toys Suggestions */}
+                {msg.role === 'bot' && msg.content === 'toys_suggestions' && (
+                  <div style={{
+                    margin: '10px 0',
+                    padding: '12px',
+                    background: '#f5f3ff',
+                    borderRadius: '8px'
+                  }}>
+                    <h4 style={{
+                      margin: '0 0 10px 0',
+                      color: '#6d28d9',
+                      fontSize: '14px',
+                      fontWeight: '600'
+                    }}>
+                      🧸 Suggested Toys:
+                    </h4>
+                    {msg.products.map((product, idx) => renderToyCard(product, idx, product.price))}
+                  </div>
+                )}
+
                 {/* Pre-confirmation preference steps: seating, then dietary.
                     The booking isn't saved until both are answered. */}
                 {msg.role === 'bot' && msg.content === 'reservation_preferences' && msg.step === 'seating' && (
@@ -1639,6 +2036,68 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
                     {msg.picks.map((item, idx) => renderMakeupCard({ ...item, description: item.reason }, idx, item.price))}
                   </div>
                 )}
+
+                {/* Gift Finder quiz, step 1: recipient's age range */}
+                {msg.role === 'bot' && msg.content === 'toys_quiz' && msg.step === 'age_range' && (
+                  <div style={{ margin: '10px 0', padding: '12px', background: '#f5f3ff', borderRadius: '8px' }}>
+                    <div style={{ fontSize: '13px', color: '#333', marginBottom: '10px', lineHeight: '1.4' }}>
+                      Who's this gift for?
+                    </div>
+                    {[
+                      { key: 'toddler', label: '🧸 Toddler (1-3)' },
+                      { key: 'kid', label: '🎈 Kid (4-9)' },
+                      { key: 'tween', label: '🎮 Tween (10-12)' },
+                    ].map(({ key, label }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => handleAgeRangeChoice(key)}
+                        style={{
+                          display: 'flex', alignItems: 'center', width: '100%',
+                          padding: '10px 12px', marginBottom: '6px', background: 'white', border: '1.5px solid #8b5cf655',
+                          borderRadius: '8px', cursor: 'pointer', textAlign: 'left', fontSize: '13px', fontWeight: '600', color: '#333',
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Step 2: the occasion */}
+                {msg.role === 'bot' && msg.content === 'toys_quiz' && msg.step === 'occasion' && (
+                  <div style={{ margin: '10px 0', padding: '12px', background: '#f5f3ff', borderRadius: '8px' }}>
+                    <div style={{ fontSize: '13px', color: '#333', marginBottom: '10px', lineHeight: '1.4' }}>
+                      What's the occasion?
+                    </div>
+                    {[
+                      { key: 'birthday', label: '🎂 Birthday' },
+                      { key: 'just-because', label: '💝 Just because' },
+                    ].map(({ key, label }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => handleOccasionChoice(msg.ageRange, key)}
+                        style={{
+                          display: 'flex', alignItems: 'center', width: '100%',
+                          padding: '10px 12px', marginBottom: '6px', background: 'white', border: '1.5px solid #8b5cf655',
+                          borderRadius: '8px', cursor: 'pointer', textAlign: 'left', fontSize: '13px', fontWeight: '600', color: '#333',
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Gift Finder results - reuses the toy product card, with
+                    each item's `reason` shown in place of its catalog
+                    description so the pick reads as personalized. */}
+                {msg.role === 'bot' && msg.content === 'toys_quiz_results' && (
+                  <div style={{ margin: '10px 0', padding: '12px', background: '#f5f3ff', borderRadius: '8px' }}>
+                    {msg.picks.map((item, idx) => renderToyCard({ ...item, description: item.reason }, idx, item.price))}
+                  </div>
+                )}
               </div>
             ))}
 
@@ -1701,43 +2160,20 @@ export default function FloatingChatbot({ initialPersona, initialEmail, initialI
             </button>
           </div>
 
-          {/* Quick Actions - capped at 3 (that's all the row has room for),
-              built by round-robin picking one pill per matched interest at a
-              time so every interest the customer actually has gets fair
-              representation, instead of just truncating a longer list and
-              silently dropping some interests entirely. Unknown interests
-              (guest, "Continue as Guest") default to food+beauty, same mix
-              as before interests existed. */}
+          {/* Quick Actions - 3 fixed pills, each one a cross-category ask
+              (price / popularity / giftability) rather than a single-
+              category shortcut, so every pill is relevant to any customer
+              regardless of which interests they picked at sign-up. Interest
+              gating (e.g. not pushing beauty on a food-only customer) still
+              happens inside each pill's own handler, same as before. */}
           <div className="quick-actions">
             {(() => {
-              const BUDGET_PILL = { key: 'budget', icon: '💰', label: 'Budget Friendly', input: 'Budget friendly under Rs500' };
-              const PILLS_BY_INTEREST = {
-                food: [
-                  { key: 'dinner', icon: '🍽️', label: 'Dinner', input: 'Dinner suggestions' },
-                  { key: 'healthy', icon: '🥗', label: 'Healthy Picks', input: 'Healthy low calorie options' },
-                ],
-                beauty: [
-                  { key: 'lipstick', icon: '💄', label: 'Lipstick', input: 'Show lipstick options' },
-                  { key: 'skincare', icon: '✨', label: 'Skincare', input: 'Show skincare options' },
-                ],
-              };
-              const knowsInterests = initialInterests && initialInterests.length > 0;
-              const matchedCategories = knowsInterests
-                ? initialInterests.filter(i => PILLS_BY_INTEREST[i])
-                : ['food', 'beauty'];
-
-              const pills = [BUDGET_PILL];
-              for (let round = 0; pills.length < 3; round++) {
-                const beforeCount = pills.length;
-                for (const category of matchedCategories) {
-                  if (pills.length >= 3) break;
-                  const pill = PILLS_BY_INTEREST[category][round];
-                  if (pill) pills.push(pill);
-                }
-                if (pills.length === beforeCount) break; // no category had anything left this round
-              }
-
-              return pills.map(pill => (
+              const PILLS = [
+                { key: 'budget', icon: '💰', label: 'Budget Friendly', input: 'Budget friendly under Rs500' },
+                { key: 'bestsellers', icon: '⭐', label: 'Best Sellers', input: 'Show me best sellers' },
+                { key: 'giftideas', icon: '🎁', label: 'Gift Ideas', input: 'Gift ideas' },
+              ];
+              return PILLS.map(pill => (
                 <button key={pill.key} onClick={() => setInput(pill.input)}>{pill.icon} {pill.label}</button>
               ));
             })()}

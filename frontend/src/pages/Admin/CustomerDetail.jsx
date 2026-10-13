@@ -6,6 +6,7 @@ import { useNavigate, useParams } from "react-router";
 const INTEREST_META = {
   food: { icon: '🍽️', label: 'Food', bg: '#fff7ed', text: '#c2410c', gradient: 'linear-gradient(135deg, #fb923c, #ea580c)' },
   beauty: { icon: '💄', label: 'Makeup', bg: '#fdf2f8', text: '#be185d', gradient: 'linear-gradient(135deg, #f472b6, #db2777)' },
+  toys: { icon: '🧸', label: 'Toys', bg: '#f5f3ff', text: '#6d28d9', gradient: 'linear-gradient(135deg, #a78bfa, #7c3aed)' },
   travel: { icon: '✈️', label: 'Travel', bg: '#eff6ff', text: '#1d4ed8', gradient: 'linear-gradient(135deg, #60a5fa, #2563eb)' },
   fitness: { icon: '💪', label: 'Fitness', bg: '#f0fdf4', text: '#15803d', gradient: 'linear-gradient(135deg, #4ade80, #16a34a)' },
 };

@@ -1,5 +1,7 @@
 """Static beauty/makeup catalog responses, AI-enhanced when possible."""
 
+import re
+
 from config import MAKEUP_DATA
 from ai import get_ollama_response, format_history
 from products import list_products
@@ -42,6 +44,42 @@ def _combined_categories():
     return combined
 
 
+_BUDGET_PATTERN = re.compile(
+    r'(?:rs\.?|₹)\s*(\d+)|(\d+)\s*(?:rs\b|rupees?|₹)|(?:under|within|below|for)\s+(?:rs\.?|₹)?\s*(\d+)',
+    re.IGNORECASE,
+)
+
+
+def _extract_budget(message):
+    """A rupee ceiling mentioned in the message ("under ₹500", "500 rs"),
+    or None - mirrors the same regex the chatbot widget already uses
+    client-side for food, and toys_info.py's identical helper. Without
+    this, a budget-only ask matched products by subcategory alone and
+    ignored price entirely."""
+    match = _BUDGET_PATTERN.search(message)
+    if not match:
+        return None
+    for group in match.groups():
+        if group:
+            return int(group)
+    return None
+
+
+def _filter_by_budget(categories, budget):
+    """Drop any item over the budget ceiling, and any category left with
+    nothing in it - applied to the same `categories` dict both the card
+    list and the AI's catalog text are built from, so the two can never
+    disagree about what's actually affordable."""
+    if budget is None:
+        return categories
+    filtered = {}
+    for category, items in categories.items():
+        kept = [item for item in items if int(re.sub(r'[^\d]', '', item['price']) or 0) <= budget]
+        if kept:
+            filtered[category] = kept
+    return filtered
+
+
 def _matching_categories(message, categories):
     """Return the category keys mentioned in the message, if any."""
     message_lower = message.lower()
@@ -73,8 +111,9 @@ def _build_catalog_text(categories_to_show, categories):
 def get_matching_products(message):
     """Return the flat list of products to show as cards - categories
     specifically named in the message, or the full catalog if the question
-    was generic (mirrors handle_makeup_request's text fallback)."""
-    categories = _combined_categories()
+    was generic (mirrors handle_makeup_request's text fallback). Also
+    honors a budget mentioned in the message, if any."""
+    categories = _filter_by_budget(_combined_categories(), _extract_budget(message))
     products = []
     for category in _categories_to_show(message, categories):
         for item in categories[category]:
@@ -125,7 +164,7 @@ def handle_makeup_request(message, history=None):
     """Return a short, conversational beauty reply. Product details (name,
     price, image) are shown separately as cards via get_matching_products,
     so this text should stay brief instead of repeating them."""
-    categories = _combined_categories()
+    categories = _filter_by_budget(_combined_categories(), _extract_budget(message))
     catalog_text = _build_catalog_text(_categories_to_show(message, categories), categories)
     history_transcript = format_history(history)
 
@@ -141,5 +180,11 @@ The matching products are already being shown to the customer as cards with phot
     response = get_ollama_response(prompt, max_tokens=60)
     if response:
         return response
-    else:
-        return catalog_text
+    # The product cards (get_matching_products) already show every name,
+    # price and description from this same catalog - falling back to
+    # catalog_text here would dump that whole thing a second time, as a
+    # single wall-of-text chat bubble, whenever the AI reply gets cut off
+    # mid-sentence and discarded (common with a long catalog in the
+    # prompt). A short generic line is honest and lets the cards do the
+    # actual work, same as the equivalent fallback in toys_info.py.
+    return "Here's what I found for you! ✨"

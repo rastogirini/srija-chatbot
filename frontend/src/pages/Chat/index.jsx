@@ -44,13 +44,16 @@ const Chat = () => {
   const [activeDiet, setActiveDiet] = useState('all');
   const [activeProtein, setActiveProtein] = useState('all');
   const [activeMakeupCategory, setActiveMakeupCategory] = useState('all');
+  const [activeToyCategory, setActiveToyCategory] = useState('all');
   // Shopkeeper-uploaded products (via the admin "Add Product" form) - merged
   // into the hardcoded catalogs below so a newly added item actually shows
   // up on this page, not just in the database.
   const [dbFoodItems, setDbFoodItems] = useState([]);
   const [dbBeautyItems, setDbBeautyItems] = useState([]);
+  const [dbToysItems, setDbToysItems] = useState([]);
   const [viewingProduct, setViewingProduct] = useState(null);
   const [chatOpen, setChatOpen] = useState(false);
+  const [picksRequest, setPicksRequest] = useState(0);
   // Persisted to localStorage below so a page refresh doesn't silently wipe
   // the cart - it previously only lived in this component's in-memory state.
   const [cart, setCart] = useState(() => {
@@ -77,7 +80,8 @@ const Chat = () => {
   const knowsInterests = selectedInterests && selectedInterests.length > 0;
   const wantsFood = !knowsInterests || selectedInterests.includes('food');
   const wantsBeauty = !knowsInterests || selectedInterests.includes('beauty');
-  const unbuiltInterests = knowsInterests ? selectedInterests.filter(i => i !== 'food' && i !== 'beauty') : [];
+  const wantsToys = !knowsInterests || selectedInterests.includes('toys');
+  const unbuiltInterests = knowsInterests ? selectedInterests.filter(i => i !== 'food' && i !== 'beauty' && i !== 'toys') : [];
 
   useEffect(() => {
     try {
@@ -95,6 +99,7 @@ const Chat = () => {
         if (!data.success) return;
         setDbFoodItems(data.products.filter(p => p.category === 'food'));
         setDbBeautyItems(data.products.filter(p => p.category === 'beauty'));
+        setDbToysItems(data.products.filter(p => p.category === 'toys'));
       })
       .catch(err => console.error('Could not load uploaded products:', err));
   }, []);
@@ -159,6 +164,17 @@ const Chat = () => {
         // cart or silently placing an order for a discontinued item.
         setCart(prev => prev.filter(c => !data.unavailable_items.includes(c.name)));
         setOrderConfirmation({ unavailable: data.unavailable_items });
+      } else if (data.insufficient_stock) {
+        // Cap each short item down to what's actually in stock (remove it
+        // entirely if that's 0) rather than dropping it outright - some of
+        // it may still be purchasable, just not the full quantity asked for.
+        const shortages = new Map(data.insufficient_stock.map(i => [i.name, i.available]));
+        setCart(prev => prev.flatMap(c => {
+          if (!shortages.has(c.name)) return [c];
+          const available = shortages.get(c.name);
+          return available > 0 ? [{ ...c, qty: available }] : [];
+        }));
+        setOrderConfirmation({ insufficientStock: data.insufficient_stock });
       } else {
         setOrderConfirmation({ error: true });
       }
@@ -197,6 +213,15 @@ const Chat = () => {
     image: p.image ? (p.image.startsWith('http') ? p.image : `http://localhost:5000${p.image}`) : '',
     description: p.description || '',
     category: (p.subcategory || 'skincare').toUpperCase(),
+  }));
+
+  const toysItems = dbToysItems.map(p => ({
+    id: `db-${p.id}`,
+    name: p.name,
+    price: `₹${Math.round(Number(p.price))}`,
+    image: p.image ? (p.image.startsWith('http') ? p.image : `http://localhost:5000${p.image}`) : '',
+    description: p.description || '',
+    category: (p.subcategory || 'building-blocks').toUpperCase(),
   }));
 
   const cuisines = [
@@ -240,13 +265,22 @@ const Chat = () => {
     return activeMakeupCategory === 'all' || item.category === activeMakeupCategory;
   });
 
-  const handleExplore = () => {
-    const chatInput = document.querySelector('input[placeholder="Type your message..."]');
-    if (chatInput) {
-      chatInput.value = 'Show me the menu';
-      chatInput.focus();
-    }
-  };
+  const toyCategories = [
+    { id: 'all', label: 'All Products', icon: '🧸' },
+    { id: 'BUILDING-BLOCKS', label: 'Building Blocks', icon: '🧱' },
+    { id: 'ACTION-FIGURES', label: 'Action Figures', icon: '🤖' },
+    { id: 'BOARD-GAMES', label: 'Board Games', icon: '🎲' },
+    { id: 'PUZZLES', label: 'Puzzles', icon: '🧩' },
+    { id: 'OUTDOOR', label: 'Outdoor', icon: '⛵' },
+  ];
+
+  const filteredToys = toysItems.filter(item => {
+    return activeToyCategory === 'all' || item.category === activeToyCategory;
+  });
+
+  // "Explore Picks Made For You": opens the chatbot straight into a
+  // personalised set of picks (FloatingChatbot watches this counter).
+  const handleExplore = () => setPicksRequest(n => n + 1);
 
   const handleLogout = () => {
     localStorage.removeItem('userToken');
@@ -317,7 +351,7 @@ const Chat = () => {
                 overflow: 'hidden'
               }}>
                 {(() => {
-                  // Only Food and Makeup have a real section on the page -
+                  // Food, Makeup, and Toys have a real section on the page -
                   // Travel/Fitness are sign-up interests with nothing built
                   // yet, so they show as a disabled "Coming Soon" entry
                   // instead of a dead link, only when actually picked as an
@@ -325,6 +359,7 @@ const Chat = () => {
                   const SHOP_MENU_ITEMS = [
                     { key: 'food', icon: '🍽️', label: 'Food', sectionId: 'food-section' },
                     { key: 'beauty', icon: '💄', label: 'Makeup', sectionId: 'makeup-section' },
+                    { key: 'toys', icon: '🧸', label: 'Toys', sectionId: 'toys-section' },
                     { key: 'travel', icon: '✈️', label: 'Travel', comingSoon: true },
                     { key: 'fitness', icon: '💪', label: 'Fitness', comingSoon: true },
                   ];
@@ -1216,6 +1251,211 @@ const Chat = () => {
         </>
         )}
 
+        {wantsToys && (
+        <>
+        {/* Toys & Games Section */}
+        <div id="toys-section" style={{ marginBottom: '60px' }}>
+          <h3 style={{ fontSize: '32px', margin: '0 0 30px 0', color: '#333' }}>
+            Toys & Games
+          </h3>
+
+          {/* Category Filter */}
+          <div style={{ marginBottom: '40px' }}>
+            <h4 style={{ margin: '0 0 15px 0', color: '#666', fontSize: '14px' }}>
+              FILTER BY CATEGORY
+            </h4>
+            <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
+              {toyCategories.map(cat => (
+                <button
+                  key={cat.id}
+                  onClick={() => setActiveToyCategory(cat.id)}
+                  style={{
+                    padding: '12px 20px',
+                    borderRadius: '25px',
+                    border: activeToyCategory === cat.id ? 'none' : '2px solid #ddd',
+                    background: activeToyCategory === cat.id
+                      ? 'linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)'
+                      : 'white',
+                    color: activeToyCategory === cat.id ? 'white' : '#333',
+                    cursor: 'pointer',
+                    fontWeight: '600',
+                    fontSize: '14px',
+                    transition: 'all 0.3s'
+                  }}
+                  onMouseEnter={(e) => {
+                    if (activeToyCategory !== cat.id) {
+                      e.target.style.borderColor = '#8b5cf6';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (activeToyCategory !== cat.id) {
+                      e.target.style.borderColor = '#ddd';
+                    }
+                  }}
+                >
+                  {cat.icon} {cat.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Toys Grid */}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+            gap: '30px'
+          }}>
+            {filteredToys.map((item) => (
+              <div key={item.id}
+              onClick={() => setViewingProduct({
+                kind: 'toys',
+                name: item.name,
+                image: item.image,
+                description: item.description,
+                category: item.category,
+                price: item.price,
+              })}
+              style={{
+                background: 'white',
+                borderRadius: '12px',
+                overflow: 'hidden',
+                boxShadow: '0 2px 12px rgba(0,0,0,0.08)',
+                transition: 'all 0.3s ease',
+                cursor: 'pointer'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'translateY(-8px)';
+                e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.15)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.boxShadow = '0 2px 12px rgba(0,0,0,0.08)';
+              }}>
+                {/* Image */}
+                <div style={{
+                  height: '250px',
+                  backgroundImage: `url("${item.image}")`,
+                  backgroundSize: 'cover',
+                  backgroundPosition: 'center',
+                  position: 'relative'
+                }}>
+                  <div style={{
+                    position: 'absolute',
+                    top: '12px',
+                    left: '12px',
+                    background: '#6d28d9',
+                    color: 'white',
+                    padding: '6px 12px',
+                    borderRadius: '4px',
+                    fontSize: '11px',
+                    fontWeight: '600'
+                  }}>
+                    {item.category}
+                  </div>
+                </div>
+
+                {/* Content */}
+                <div style={{ padding: '20px' }}>
+                  <h4 style={{
+                    margin: '0 0 8px 0',
+                    fontSize: '18px',
+                    fontWeight: '600',
+                    color: '#333'
+                  }}>
+                    {item.name}
+                  </h4>
+                  <p style={{
+                    margin: '0 0 15px 0',
+                    fontSize: '14px',
+                    color: '#666',
+                    lineHeight: '1.5'
+                  }}>
+                    {item.description}
+                  </p>
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center'
+                  }}>
+                    <span style={{
+                      fontSize: '24px',
+                      fontWeight: '700',
+                      color: '#8b5cf6'
+                    }}>
+                      {item.price}
+                    </span>
+                    {(() => {
+                      const itemCartItem = {
+                        kind: 'toys',
+                        name: item.name,
+                        image: item.image,
+                        description: item.description,
+                        category: item.category,
+                        price: item.price,
+                      };
+                      const itemQty = getCartQty(item.name, 'toys');
+                      if (itemQty > 0) {
+                        return (
+                          <div
+                            onClick={(e) => e.stopPropagation()}
+                            style={{ width: '120px', padding: '6px 10px', border: '1.5px solid #8b5cf6', borderRadius: '6px' }}
+                          >
+                            <QtyStepper
+                              qty={itemQty}
+                              accent="#8b5cf6"
+                              variant="compact"
+                              onIncrease={() => addToCart(itemCartItem)}
+                              onDecrease={() => decreaseQty(item.name, 'toys')}
+                            />
+                          </div>
+                        );
+                      }
+                      return (
+                        <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          addToCart(itemCartItem);
+                        }}
+                        style={{
+                          background: 'linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)',
+                          color: 'white',
+                          border: 'none',
+                          padding: '10px 20px',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          fontWeight: '600',
+                          fontSize: '12px',
+                          transition: 'all 0.3s'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.target.style.transform = 'scale(1.05)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.target.style.transform = 'scale(1)';
+                        }}>
+                          🛒 Add to Cart
+                        </button>
+                      );
+                    })()}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {filteredToys.length === 0 && (
+            <div style={{
+              textAlign: 'center',
+              padding: '60px 20px',
+              color: '#999'
+            }}>
+              <p style={{ fontSize: '18px' }}>No products match your filter. Try a different category!</p>
+            </div>
+          )}
+        </div>
+        </>
+        )}
+
         {/* Features Section */}
         <div style={{
           display: 'grid',
@@ -1274,6 +1514,7 @@ const Chat = () => {
         initialPersona={selectedPersona}
         initialEmail={selectedEmail}
         initialInterests={selectedInterests}
+        picksRequest={picksRequest}
         onViewProduct={setViewingProduct}
         onOpenChange={setChatOpen}
         cart={cart}
